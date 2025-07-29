@@ -16,15 +16,14 @@ object Main {
       java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd-HH")
     )
 
-    // Crear ref_customers con partición
     val refData = Seq(
       (1, "US", 100.50, "active"),
       (2, "ES", 75.20, "pending"),
       (3, "MX", 150.00, "active"),
       (4, "BR", 200.00, "new"),
-      (4, "BR", 200.00, "new"),  // Duplicado idéntico
+      (4, "BR", 200.00, "new"),
       (5, "FR", 300.00, "active"),
-      (5, "FR", 300.50, "active") // Duplicado con variación
+      (5, "FR", 300.50, "active")
     ).toDF("id", "country", "amount", "status")
      .withColumn("partition_date", lit(partitionDate))
 
@@ -43,15 +42,14 @@ object Main {
 
     refData.write.mode("overwrite").insertInto("default.ref_customers")
 
-    // Crear new_customers con partición
     val newData = Seq(
       (1, "US", 100.49, "active"),
       (2, "ES", 75.20, "expired"),
       (4, "BR", 200.00, "new"),
-      (4, "BR", 200.00, "new"),    // Duplicado idéntico
+      (4, "BR", 200.00, "new"),
       (6, "DE", 400.00, "new"),
-      (6, "DE", 400.00, "new"),    // Duplicado idéntico
-      (6, "DE", 400.10, "new")     // Variación en duplicado
+      (6, "DE", 400.00, "new"),
+      (6, "DE", 400.10, "new")
     ).toDF("id", "country", "amount", "status")
      .withColumn("partition_date", lit(partitionDate))
 
@@ -70,12 +68,11 @@ object Main {
 
     newData.write.mode("overwrite").insertInto("default.new_customers")
 
-    // Crear tablas destino con partición
     spark.sql("DROP TABLE IF EXISTS default.customer_differences")
     spark.sql(
       """
         |CREATE TABLE IF NOT EXISTS default.customer_differences (
-        |  id INT,
+        |  id STRING,
         |  Columna STRING,
         |  Valor_ref STRING,
         |  Valor_new STRING,
@@ -89,9 +86,12 @@ object Main {
     spark.sql(
       """
         |CREATE TABLE IF NOT EXISTS default.customer_summary (
-        |  Resultado STRING,
-        |  count BIGINT,
-        |  `%% Ref` STRING
+        |  Metrica STRING,
+        |  count_Ref STRING,
+        |  count_New STRING,
+        |  pct_Ref STRING,
+        |  Status STRING,
+        |  Ejemplos STRING
         |)
         |PARTITIONED BY (partition_hour STRING)
         |STORED AS PARQUET
@@ -102,10 +102,10 @@ object Main {
       """
         |CREATE TABLE IF NOT EXISTS default.customer_duplicates (
         |  origin STRING,
-        |  id INT,
-        |  exact_duplicates INT,
-        |  varied_duplicates INT,
-        |  total INT,
+        |  id STRING,
+        |  exact_duplicates STRING,
+        |  varied_duplicates STRING,
+        |  total STRING,
         |  variations STRING
         |)
         |PARTITIONED BY (partition_hour STRING)
@@ -158,4 +158,3 @@ object Main {
     spark.stop()
   }
 }
-
