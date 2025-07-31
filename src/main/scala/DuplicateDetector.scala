@@ -1,13 +1,13 @@
 import org.apache.spark.sql.{DataFrame, Row, SparkSession, Dataset, Encoders}
 import org.apache.spark.sql.functions._
 
-case class DuplicateRow(
+case class DuplicateOut(
   origin: String,
-  id: Int,
-  exact_duplicates: Int,
-  varied_duplicates: Int,
-  total: Int,
-  variations: String,
+  id: String,
+  exact_duplicates: String,          // total - numDistinct (exceso de filas idénticas)
+  duplicates_w_variations: String,   // max(numDistinct - 1, 0) (exceso de versiones)
+  occurrences: String,               // total
+  variations: String,                // campo: [v1,v2,...] | ...
   partition_hour: String
 )
 
@@ -23,47 +23,62 @@ object DuplicateDetector {
 
     import spark.implicits._
 
+    // Añadimos marca de origen
     val withSourceRef = refDf.withColumn("_source", lit("ref"))
     val withSourceNew = newDf.withColumn("_source", lit("new"))
     val unioned = withSourceRef.unionByName(withSourceNew)
 
+    // Agrupamos por origen + clave y acumulamos los registros del grupo
     val grouped = unioned
       .groupBy((Seq(col("_source")) ++ compositeKeyCols.map(col)): _*)
       .agg(
-        collect_list(struct(unioned.columns.filterNot(_ == "_source").map(col): _*)).as("records")
+        collect_list(
+          struct(unioned.columns.filterNot(_ == "_source").map(col): _*)
+        ).as("records")
       )
+      // Solo grupos con más de una fila
       .filter(size(col("records")) > 1)
 
-    val duplicatesRows: Dataset[DuplicateRow] = grouped.flatMap { row =>
-      val origin = row.getAs[String]("_source")
+    // Calculamos métricas por grupo y emitimos como Strings (DDL exige STRING)
+    val ds: Dataset[DuplicateOut] = grouped.map { row =>
+      val sourceTag = row.getAs[String]("_source")
+      val origin = if (sourceTag == "ref") "Reference" else "New"
+
       val keyValues = compositeKeyCols.map(k => row.getAs[Any](k))
+      val idStr = keyValues.headOption.map(_.toString).getOrElse("")
+
       val records = row.getAs[Seq[Row]]("records")
+      val total = records.size
 
-      val exactos = records.groupBy(identity).count(_._2.size > 1)
-      val distintos = records.distinct.size
+      // Distintos por igualdad de struct
+      val distinctRecords = records.distinct
+      val numDistinct = distinctRecords.size
 
-      val variaciones: Seq[String] = if (distintos > 1) {
-        records
-          .flatMap(r => r.schema.fieldNames.map(f => f -> r.getAs[Any](f)))
-          .groupBy(_._1)
-          .mapValues(vals => vals.map(_._2).distinct.filter(_ != null))
-          .filter { case (_, v) => v.size > 1 }
-          .map { case (campo, valores) =>
-            s"$campo: [${valores.mkString(",")}]"
-          }.toSeq
-      } else Seq.empty[String]
+      val exactDupExcess  = math.max(total - numDistinct, 0) // exceso de filas idénticas
+      val variedDupExcess = math.max(numDistinct - 1, 0)     // exceso de versiones
 
-      Some(DuplicateRow(
-        origin = if (origin == "ref") "Referencia" else "Nuevos",
-        id = keyValues.headOption.map(_.toString.toInt).getOrElse(-1),
-        exact_duplicates = exactos,
-        varied_duplicates = distintos - exactos,
-        total = records.size,
-        variations = if (variaciones.nonEmpty) variaciones.mkString(" | ") else "-",
+      // Campos con variaciones (excluimos claves)
+      val allFieldNames =
+        if (records.nonEmpty) records.head.schema.fieldNames.toSeq else Seq.empty[String]
+      val fieldsToCheck = allFieldNames.filterNot(f => compositeKeyCols.contains(f))
+
+      val variationsParts = fieldsToCheck.flatMap { f =>
+        val vals = distinctRecords.map(r => r.getAs[Any](f)).filter(_ != null).distinct
+        if (vals.size > 1) Some(s"$f: [${vals.mkString(",")}]") else None
+      }
+      val variationsStr = if (variationsParts.nonEmpty) variationsParts.mkString(" | ") else "-"
+
+      DuplicateOut(
+        origin = origin,
+        id = idStr,
+        exact_duplicates = exactDupExcess.toString,
+        duplicates_w_variations = variedDupExcess.toString,
+        occurrences = total.toString,
+        variations = variationsStr,
         partition_hour = partitionHour
-      ))
-    }(Encoders.product[DuplicateRow])
+      )
+    }(Encoders.product[DuplicateOut])
 
-    duplicatesRows.toDF()
+    ds.toDF()
   }
 }

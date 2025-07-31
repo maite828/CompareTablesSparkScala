@@ -76,7 +76,7 @@ object Main {
         |  Columna STRING,
         |  Valor_ref STRING,
         |  Valor_new STRING,
-        |  Resultado STRING
+        |  Results STRING
         |)
         |PARTITIONED BY (partition_hour STRING)
         |STORED AS PARQUET
@@ -87,11 +87,11 @@ object Main {
       """
         |CREATE TABLE IF NOT EXISTS default.customer_summary (
         |  Metrica STRING,
-        |  count_Ref STRING,
-        |  count_New STRING,
+        |  total_Ref STRING,
+        |  total_New STRING,
         |  pct_Ref STRING,
         |  Status STRING,
-        |  Ejemplos STRING
+        |  Examples STRING
         |)
         |PARTITIONED BY (partition_hour STRING)
         |STORED AS PARQUET
@@ -104,8 +104,8 @@ object Main {
         |  origin STRING,
         |  id STRING,
         |  exact_duplicates STRING,
-        |  varied_duplicates STRING,
-        |  total STRING,
+        |  duplicates_w_variations STRING,
+        |  occurrences STRING,
         |  variations STRING
         |)
         |PARTITIONED BY (partition_hour STRING)

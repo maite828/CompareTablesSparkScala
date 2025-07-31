@@ -47,9 +47,11 @@ object CompareTablesEnhancedStrict {
     val newDfBase = applyPartition(spark.table(newTable))
 
     val allCols = refDfBase.columns.filterNot(ignoreCols.contains).filterNot(_ == "partition_date")
+    val allColsFiltered = allCols.filterNot(compositeKeyCols.contains) // evita duplicar claves
 
-    val refDf = refDfBase.select((compositeKeyCols ++ allCols).distinct.map(col): _*)
-    val newDf = newDfBase.select((compositeKeyCols ++ allCols).distinct.map(col): _*)
+    // Importante: mantener orden y claves correctas sin .distinct
+    val refDf = refDfBase.select((compositeKeyCols ++ allColsFiltered).map(col): _*)
+    val newDf = newDfBase.select((compositeKeyCols ++ allColsFiltered).map(col): _*)
 
     val diffDf = DiffGenerator.generateDifferencesTable(
       spark, refDf, newDf, compositeKeyCols, allCols, partitionHour, includeEqualsInDiff
@@ -64,7 +66,7 @@ object CompareTablesEnhancedStrict {
     }
 
     val summary = SummaryGenerator.generateSummaryTable(
-      spark, refDf, newDf, diffDf, dupDf, compositeKeyCols, partitionHour,refDfBase, newDfBase
+      spark, refDf, newDf, diffDf, dupDf, compositeKeyCols, partitionHour, refDfBase, newDfBase
     )
     summary.write.mode("overwrite").insertInto(reportTable)
   }
