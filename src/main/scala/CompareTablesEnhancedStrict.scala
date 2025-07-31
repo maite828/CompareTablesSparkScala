@@ -54,7 +54,7 @@ object CompareTablesEnhancedStrict {
     val newDf = newDfBase.select((compositeKeyCols ++ allColsFiltered).map(col): _*)
 
     val diffDf = DiffGenerator.generateDifferencesTable(
-      spark, refDf, newDf, compositeKeyCols, allCols, partitionHour, includeEqualsInDiff
+      spark, refDf, newDf, compositeKeyCols, allColsFiltered, partitionHour, includeEqualsInDiff
     )
     diffDf.write.mode("overwrite").insertInto(diffTable)
 

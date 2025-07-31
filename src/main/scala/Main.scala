@@ -74,8 +74,8 @@ object Main {
         |CREATE TABLE IF NOT EXISTS default.customer_differences (
         |  id STRING,
         |  Columna STRING,
-        |  Valor_ref STRING,
-        |  Valor_new STRING,
+        |  Value_ref STRING,
+        |  Value_new STRING,
         |  Results STRING
         |)
         |PARTITIONED BY (partition_hour STRING)

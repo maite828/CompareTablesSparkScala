@@ -1,4 +1,4 @@
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.{DataFrame, SparkSession, Column}
 import org.apache.spark.sql.functions._
 
 object DiffGenerator {
@@ -8,37 +8,80 @@ object DiffGenerator {
     refDf: DataFrame,
     newDf: DataFrame,
     compositeKeyCols: Seq[String],
-    compareCols: Seq[String],
+    compareColsIn: Seq[String],
     partitionHour: String,
     includeEquals: Boolean
   ): DataFrame = {
 
     import spark.implicits._
 
-    val joined = refDf.as("ref").join(newDf.as("new"), compositeKeyCols, "fullouter")
+    // 1) Asegurar que no comparamos las claves
+    val compareCols: Seq[String] = compareColsIn.filterNot(compositeKeyCols.contains)
 
-    val diffsExtended = compareCols.map { colName =>
+    // 2) Construir agregaciones por clave para evitar duplicados (tomamos un representante con first)
+    def aggPerKey(df: DataFrame, alias: String): DataFrame = {
+      val aggs: Seq[Column] = compareCols.map(c => first(col(c), ignoreNulls = true).as(c))
+      df.groupBy(compositeKeyCols.map(col): _*).agg(aggs.head, aggs.tail: _*).as(alias)
+    }
+
+    val refAgg = aggPerKey(refDf, "ref")
+    val newAgg = aggPerKey(newDf, "new")
+
+    // 3) Full outer join por clave
+    val joined = refAgg.join(newAgg, compositeKeyCols, "fullouter")
+
+    // 4) Para cada columna comparada, armamos un struct con el resultado
+    val diffsPerCol: Seq[Column] = compareCols.map { c =>
+      val refCol = col(s"ref.$c")
+      val newCol = col(s"new.$c")
+      val result = when(refCol.isNull && newCol.isNotNull, lit("ONLY_IN_NEW"))
+        .when(newCol.isNull && refCol.isNotNull, lit("ONLY_IN_REF"))
+        .when(refCol =!= newCol, lit("NO_MATCH"))
+        .otherwise(lit("MATCH"))
+
+      // id de salida = coalesce de las claves (como string)
+      val idOut: Column =
+        if (compositeKeyCols.length == 1)
+          coalesce(col(s"ref.${compositeKeyCols.head}"), col(s"new.${compositeKeyCols.head}")).cast("string").as("id")
+        else {
+          // Si la clave es compuesta, concatenamos sus valores con '|'
+          val refKey = concat_ws("|", compositeKeyCols.map(k => col(s"ref.$k").cast("string")): _*)
+          val newKey = concat_ws("|", compositeKeyCols.map(k => col(s"new.$k").cast("string")): _*)
+          coalesce(refKey, newKey).as("id")
+        }
+
       struct(
-        compositeKeyCols.map(c => coalesce(col(s"ref.$c"), col(s"new.$c")).as(c)) ++ Seq(
-          lit(colName).as("Columna"),
-          col(s"ref.$colName").cast("string").as("Valor_ref"),
-          col(s"new.$colName").cast("string").as("Valor_new"),
-          when(col(s"ref.$colName").isNull && col(s"new.$colName").isNotNull, "ONLY_IN_NEW")
-            .when(col(s"new.$colName").isNull && col(s"ref.$colName").isNotNull, "ONLY_IN_REF")
-            .when(col(s"ref.$colName") =!= col(s"new.$colName"), "DIFERENCIA")
-            .otherwise("COINCIDE").as("Resultado")
-        ): _*
+        idOut,
+        lit(c).as("Column"),
+        coalesce(refCol.cast("string"), lit("-")).as("value_ref"),
+        coalesce(newCol.cast("string"), lit("-")).as("value_new"),
+        result.as("Results")
       )
     }
 
-    val diffRaw = joined
-      .select(array(diffsExtended: _*).as("diferencias"))
-      .withColumn("diferencia", explode(col("diferencias")))
-      .select("diferencia.*")
+    val exploded = joined
+      .select(array(diffsPerCol: _*).as("diffs"))
+      .withColumn("d", explode(col("diffs")))
+      .select("d.*")
       .withColumn("partition_hour", lit(partitionHour))
 
-    val diffDf = if (includeEquals) diffRaw else diffRaw.filter($"Resultado" =!= "COINCIDE")
+    if (includeEquals) {
+      // Modo extendido: devolvemos todo (MATCH, NO_MATCH, ONLY_IN_*)
+      exploded
+    } else {
+      // Modo compacto:
+      // - Mantener NO_MATCH
+      val noMatch = exploded.filter($"Results" === "NO_MATCH")
 
-    diffDf
+      // - Para ONLY_IN_REF / ONLY_IN_NEW: dejar una sola fila por id usando la "primera" columna de compare
+      val pickCol = compareCols.headOption.getOrElse(compareColsIn.headOption.getOrElse(""))
+
+      val onlyInRef = exploded
+        .filter($"Results" === "ONLY_IN_REF" && $"Column" === lit(pickCol))
+      val onlyInNew = exploded
+        .filter($"Results" === "ONLY_IN_NEW" && $"Column" === lit(pickCol))
+
+      noMatch.unionByName(onlyInRef).unionByName(onlyInNew)
+    }
   }
 }
