@@ -73,7 +73,7 @@ object Main {
       """
         |CREATE TABLE IF NOT EXISTS default.customer_differences (
         |  id STRING,
-        |  Columna STRING,
+        |  Column STRING,
         |  Value_ref STRING,
         |  Value_new STRING,
         |  Results STRING
