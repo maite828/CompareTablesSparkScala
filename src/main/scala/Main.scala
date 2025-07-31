@@ -125,7 +125,7 @@ object Main {
       "diffTable" -> "default.customer_differences",
       "duplicatesTable" -> "default.customer_duplicates",
       "checkDuplicates" -> true,
-      "includeEqualsInDiff" -> false
+      "includeEqualsInDiff" -> true
     )
 
     CompareTablesEnhancedStrict.run(

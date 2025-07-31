@@ -42,7 +42,7 @@ object DuplicateDetector {
     // Calculamos métricas por grupo y emitimos como Strings (DDL exige STRING)
     val ds: Dataset[DuplicateOut] = grouped.map { row =>
       val sourceTag = row.getAs[String]("_source")
-      val origin = if (sourceTag == "ref") "Reference" else "New"
+      val origin = if (sourceTag == "ref") "Ref" else "New"
 
       val keyValues = compositeKeyCols.map(k => row.getAs[Any](k))
       val idStr = keyValues.headOption.map(_.toString).getOrElse("")
