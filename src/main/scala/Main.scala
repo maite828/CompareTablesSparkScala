@@ -1,5 +1,8 @@
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.functions.lit
 
 object Main {
   def main(args: Array[String]): Unit = {
@@ -16,17 +19,42 @@ object Main {
       java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd-HH")
     )
 
-    val refData = Seq(
-      (1, "US", 100.50, "active"),
-      (2, "ES", 75.20, "pending"),
-      (3, "MX", 150.00, "active"),
-      (4, "BR", 200.00, "new"),
-      (4, "BR", 200.00, "new"),
-      (5, "FR", 300.00, "active"),
-      (5, "FR", 300.50, "active")
-    ).toDF("id", "country", "amount", "status")
-     .withColumn("partition_date", lit(partitionDate))
+//-----------------------------------------------------------------------
+    // 1. Definir el esquema
+    val customSchema0 = StructType(Seq(
+      StructField("id", IntegerType, nullable = true),
+      StructField("country", StringType, nullable = true),
+      StructField("amount", DoubleType, nullable = true),
+      StructField("status", StringType, nullable = true)
+    ))
 
+    val refData = Seq(
+      Row(1, "US", 100.50, "active"),
+      Row(2, "ES", 75.20, "pending"),
+      Row(3, "MX", 150.00, "active"),
+      Row(4, "BR", 200.00, "new"),
+      Row(4, "BR", 200.00, "new"),
+      Row(5, "FR", 300.00, "active"),
+      Row(5, "FR", 300.50, "active"),
+      Row(7, "PT", 300.50, "active"),
+      Row(8, "BR", 100.50, "pending"),
+      Row(9, "AN", 80.00, "new"),
+      Row(10, "GR",60.00, "new"),
+      Row(null, "GR",61.00, "new")
+    )
+
+    // 3. Crear DataFrame
+    val newDataFrame0 = spark.createDataFrame(
+      spark.sparkContext.parallelize(refData),
+      customSchema0
+    ).withColumn("partition_date", lit(partitionDate))  
+
+
+    // 4. Configuración para particiones dinámicas (opcional)
+    spark.conf.set("hive.exec.dynamic.partition", "true")
+    spark.conf.set("hive.exec.dynamic.partition.mode", "nonstrict")
+
+    // 5. Crear tabla (si no existe)
     spark.sql("DROP TABLE IF EXISTS default.ref_customers")
     spark.sql(
       """
@@ -40,23 +68,41 @@ object Main {
         |STORED AS PARQUET
       """.stripMargin)
 
-    refData.write.mode("overwrite").insertInto("default.ref_customers")
+    // 6. Escribir datos
+    newDataFrame0.write
+      .mode("overwrite")
+      .insertInto("default.ref_customers")   
 
-    val newData = Seq(
-      (1, "US", 100.49, "active"),
-      (2, "ES", 75.20, "expired"),
-      (4, "BR", 200.00, "new"),
-      (4, "BR", 200.00, "new"),
-      (6, "DE", 400.00, "new"),
-      (6, "DE", 400.00, "new"),
-      (6, "DE", 400.10, "new")
-    ).toDF("id", "country", "amount", "status")
-     .withColumn("partition_date", lit(partitionDate))
 
+//-----------------------------------------------------------------------
+    // 2. Preparar los datos
+    val rowData = Seq(
+      Row(1, "US", 100.49, "active"),
+      Row(2, "ES", 75.20, "expired"),
+      Row(4, "BR", 200.00, "new"),
+      Row(4, "BR", 200.00, "new"),
+      Row(6, "DE", 400.00, "new"),
+      Row(6, "DE", 400.00, "new"),
+      Row(6, "DE", 400.10, "new"),
+      Row(7, "",   300.50, "active"),
+      Row(8, "BR", null,   "pending"),
+      Row(9, "AN", 80.00,  null),
+      Row(null, "GR",60.00, "new"),
+      Row(null, "GR",60.00, "new"),
+      Row(null, "GR",60.00, "new")
+    )
+
+    // 3. Crear DataFrame
+    val newDataFrame = spark.createDataFrame(
+      spark.sparkContext.parallelize(rowData),
+      customSchema0
+    ).withColumn("partition_date", lit(partitionDate))
+
+    // 4. Crear tabla (si no existe)
     spark.sql("DROP TABLE IF EXISTS default.new_customers")
     spark.sql(
       """
-        |CREATE TABLE IF NOT EXISTS default.new_customers (
+        |CREATE TABLE default.new_customers (
         |  id INT,
         |  country STRING,
         |  amount DOUBLE,
@@ -66,8 +112,12 @@ object Main {
         |STORED AS PARQUET
       """.stripMargin)
 
-    newData.write.mode("overwrite").insertInto("default.new_customers")
+    // 6. Escribir datos
+    newDataFrame.write
+      .mode("overwrite")
+      .insertInto("default.new_customers")
 
+//-----------------------------------------------------------------------
     spark.sql("DROP TABLE IF EXISTS default.customer_differences")
     spark.sql(
       """
@@ -97,6 +147,8 @@ object Main {
         |STORED AS PARQUET
       """.stripMargin)
 
+
+//-----------------------------------------------------------------------
     spark.sql("DROP TABLE IF EXISTS default.customer_duplicates")
     spark.sql(
       """
@@ -111,6 +163,8 @@ object Main {
         |PARTITIONED BY (partition_hour STRING)
         |STORED AS PARQUET
       """.stripMargin)
+//-----------------------------------------------------------------------
+
 
     println("✅ Tablas ref_customers y new_customers con partición creadas")
     println("✅ Tablas destino creadas: customer_differences, customer_summary y customer_duplicates")
@@ -147,7 +201,7 @@ object Main {
     spark.sql("SHOW TABLES").show(false)
 
     println("==== customer_differences ====")
-    spark.sql("SELECT * FROM customer_differences").show(false)
+    spark.sql("SELECT * FROM customer_differences").show(100,false)
 
     println("==== customer_summary ====")
     spark.sql("SELECT * FROM customer_summary").show(false)
