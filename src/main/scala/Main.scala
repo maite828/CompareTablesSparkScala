@@ -123,10 +123,10 @@ object Main {
       """
         |CREATE TABLE IF NOT EXISTS default.customer_differences (
         |  id STRING,
-        |  Column STRING,
-        |  Value_ref STRING,
-        |  Value_new STRING,
-        |  Results STRING
+        |  column STRING,
+        |  value_ref STRING,
+        |  value_new STRING,
+        |  results STRING
         |)
         |PARTITIONED BY (partition_hour STRING)
         |STORED AS PARQUET
@@ -136,12 +136,13 @@ object Main {
     spark.sql(
       """
         |CREATE TABLE IF NOT EXISTS default.customer_summary (
-        |  Metrica STRING,
-        |  total_Ref STRING,
-        |  total_New STRING,
-        |  pct_Ref STRING,
-        |  Status STRING,
-        |  Examples STRING
+        | metrica        STRING,
+        | total_ref      STRING,
+        | total_new      STRING,
+        | pct_ref        STRING,
+        | status         STRING,
+        | examples       STRING,
+        |table          STRING  
         |)
         |PARTITIONED BY (partition_hour STRING)
         |STORED AS PARQUET

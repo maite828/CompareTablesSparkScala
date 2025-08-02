@@ -1,28 +1,28 @@
 import org.apache.spark.sql.{DataFrame, SparkSession, Column}
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
 import java.util.Locale
 
-/* ----- fila intermedia que luego convertimos a DataFrame -------------- */
+/* -------- fila intermedia (nombres en minúsculas) -------------------- */
 private case class SummaryRow(
-  Metrica:   String,
-  total_Ref: String,
-  total_New: String,
-  pct_Ref:   String,
-  Status:    String,
-  Examples:  String
+  metrica:   String,
+  total_ref: String,
+  total_new: String,
+  pct_ref:   String,
+  status:    String,
+  examples:  String,
+  table:     String
 )
 
 object SummaryGenerator {
 
-  /** Convierte +1 / 0 / -1 a “+1” / “0” / “-1”. */
   private def signed(n: Long): String = if (n > 0) s"+$n" else n.toString
 
-  /** Calcula la tabla resumen completa (ID NULL incluido). */
   def generateSummaryTable(
       spark: SparkSession,
       refDf: DataFrame,
       newDf: DataFrame,
-      diffDf: DataFrame,
+      diffDf: DataFrame,     // usamos diffDf para MATCH/NO_MATCH
       dupDf: DataFrame,
       compositeKeyCols: Seq[String],
       partitionHour: String,
@@ -32,125 +32,134 @@ object SummaryGenerator {
 
     import spark.implicits._
 
-    /* 0) Clave nula → literal "NULL" en todos los DF ------------------- */
+    /* 0) Normaliza NULL a "NULL" en todos los DF ---------------------- */
     val idCol   = compositeKeyCols.head
     val idFixed = coalesce(col(idCol).cast("string"), lit("NULL"))
 
-    val refFix  = refDf .withColumn("id_fix", idFixed)
-    val newFix  = newDf .withColumn("id_fix", idFixed)
-    val diffFix = diffDf.withColumn("id_fix", idFixed)
-    val dupFix  = dupDf .withColumn("id_fix", coalesce($"id".cast("string"), lit("NULL")))
+    val refFix   = refDf   .withColumn("id_fix", idFixed)
+    val newFix   = newDf   .withColumn("id_fix", idFixed)
+    val refRawFx = refDfRaw.withColumn("id_fix", idFixed)
+    val newRawFx = newDfRaw.withColumn("id_fix", idFixed)
 
-    /* Totales */
-    val totalIdsRef  = refFix.select("id_fix").distinct().count()   // 11
-    val totalRowsRef = refDfRaw.count()                            // 12
-    val totalRowsNew = newDfRaw.count()                            // 13
+    /* Totales --------------------------------------------------------- */
+    val totalIdsRef  = refFix.select("id_fix").distinct().count()
+    val totalRowsRef = refDfRaw.count()
+    val totalRowsNew = newDfRaw.count()
 
-    /* 1) Normaliza duplicados ----------------------------------------- */
-    val dupNorm = dupFix
-      .withColumn("origin_norm",
-        when(lower($"origin").isin("reference","ref","referencia"), "reference")
-          .otherwise("new"))
-      .withColumn("exact_l", $"exact_duplicates".cast("long"))
-      .withColumn("var_l",   $"duplicates_w_variations".cast("long"))
+    /* 1) Duplicados por lado (conteo por ID en crudo) ----------------- */
+    val refDupIds = refRawFx.groupBy($"id_fix").agg(count(lit(1)).as("cnt"))
+                            .filter($"cnt" > 1).select("id_fix").distinct()
+    val newDupIds = newRawFx.groupBy($"id_fix").agg(count(lit(1)).as("cnt"))
+                            .filter($"cnt" > 1).select("id_fix").distinct()
 
-    val exactDupIdsRef = dupNorm.filter($"origin_norm"==="reference" && $"exact_l">0 && $"var_l"===0)
-                                .select("id_fix").distinct()
-    val exactDupIdsNew = dupNorm.filter($"origin_norm"==="new"        && $"exact_l">0 && $"var_l"===0)
-                                .select("id_fix").distinct()
+    // EXACT = duplicados en ambos lados; ref-only / new-only según corresponda
+    val exactBothDupIds = refDupIds.intersect(newDupIds)
+    val refOnlyDupIds   = refDupIds.except(newDupIds)
+    val newOnlyDupIds   = newDupIds.except(refDupIds)
 
-    val variedDupIdsRef = dupNorm.filter($"origin_norm"==="reference" && $"var_l">0)
-                                 .select("id_fix").distinct()
-    val variedDupIdsNew = dupNorm.filter($"origin_norm"==="new"       && $"var_l">0)
-                                 .select("id_fix").distinct()
+    /* 2) MATCH / NO_MATCH desde diffDf (consistente con DiffGenerator) - */
+    // Requiere includeEqualsInDiff = true para que tengamos MATCH en diffDf.
+    val diffById = diffDf
+      .groupBy(col("id"))
+      .agg(
+        max(when(lower(col("results")) === "no_match", 1).otherwise(0)).as("has_no_match"),
+        max(when(lower(col("results")).isin("only_in_ref","only_in_new"), 1).otherwise(0)).as("has_only")
+      )
 
-    /* 2) 1:1 exact & variaciones -------------------------------------- */
-    val commonCols = refFix.columns.toSet.intersect(newFix.columns.toSet).toSeq
-    val exactMatchIds = refFix.select(commonCols.map(col): _*)
-                              .intersect(newFix.select(commonCols.map(col): _*))
-                              .select("id_fix").distinct()
+    val exactMatchIds = diffById
+      .filter(col("has_no_match") === 0 && col("has_only") === 0)
+      .select(col("id").cast("string").as("id_fix"))
+      .distinct()
 
-    val mismatchIds = diffFix.filter($"Results"==="NO_MATCH")
-                             .select("id_fix").distinct()
+    val mismatchIds = diffById
+      .filter(col("has_no_match") === 1)
+      .select(col("id").cast("string").as("id_fix"))
+      .distinct()
 
-    /* 3) Only-in ------------------------------------------------------- */
+    /* 3) Only-in ------------------------------------------------------ */
     val onlyRefIds = refFix.select("id_fix").except(newFix.select("id_fix"))
     val onlyNewIds = newFix.select("id_fix").except(refFix.select("id_fix"))
 
-    /* 4) utilidades ---------------------------------------------------- */
+    /* helpers ---------------------------------------------------------- */
     def pct(n: Long): String =
       if (totalIdsRef == 0) "-" else "%.1f%%".formatLocal(Locale.US, n.toDouble/totalIdsRef*100)
 
-    def idsToStr(df: DataFrame): String = df.limit(20).as[String].collect().mkString(",")
+    def idsToStr(df: DataFrame): String = df.limit(50).as[String].collect().mkString(",")
 
-    /* 5) Construcción en memoria (todo String) ------------------------ */
+    /* 4) Construcción de filas ---------------------------------------- */
     val rows = Seq(
-      SummaryRow("Exact Duplicates",
-        exactDupIdsRef.count().toString,
-        exactDupIdsNew.count().toString,
-        pct(exactDupIdsRef.count()),
-        "Exact",
-        idsToStr(exactDupIdsRef.union(exactDupIdsNew).distinct())),
+      SummaryRow("exact duplicates",
+        exactBothDupIds.count().toString,
+        exactBothDupIds.count().toString,
+        pct(exactBothDupIds.count()),
+        "EXACT",
+        idsToStr(exactBothDupIds),
+        "duplicate_records"),
 
-      SummaryRow("Duplicates with Variations (ref)",
-        variedDupIdsRef.count().toString, "-",
-        pct(variedDupIdsRef.count()),
-        "Variations",
-        idsToStr(variedDupIdsRef)),
+      SummaryRow("duplicates with variations (ref)",
+        refOnlyDupIds.count().toString, "-",
+        pct(refOnlyDupIds.count()),
+        "VARIATIONS",
+        idsToStr(refOnlyDupIds),
+        "duplicate_records"),
 
-      SummaryRow("Duplicates with Variations (new)",
-        "-", variedDupIdsNew.count().toString, "-",
-        "Variations",
-        idsToStr(variedDupIdsNew)),
+      SummaryRow("duplicates with variations (new)",
+        "-", newOnlyDupIds.count().toString, "-",
+        "VARIATIONS",
+        idsToStr(newOnlyDupIds),
+        "duplicate_records"),
 
-      SummaryRow("1:1 Exact Matches",
+      SummaryRow("1:1 exact matches",
         exactMatchIds.count().toString,
         exactMatchIds.count().toString,
         pct(exactMatchIds.count()),
-        "Match",
-        idsToStr(exactMatchIds)),
+        "MATCH",
+        idsToStr(exactMatchIds),
+        "different_records"),
 
-      SummaryRow("1:1 Matches variations",
+      SummaryRow("1:1 matches variations",
         mismatchIds.count().toString,
         mismatchIds.count().toString,
         pct(mismatchIds.count()),
-        "No Match",
-        idsToStr(mismatchIds)),
+        "NO_MATCH",
+        idsToStr(mismatchIds),
+        "different_records"),
 
-      SummaryRow("1:0 (Only in Reference)",
+      SummaryRow("1:0 (only in reference)",
         onlyRefIds.count().toString, "-",
         pct(onlyRefIds.count()),
-        "Missing",
-        idsToStr(onlyRefIds)),
+        "ONLY_IN_REF",
+        idsToStr(onlyRefIds),
+        "different_records"),
 
-      SummaryRow("0:1 (Only in New)",
+      SummaryRow("0:1 (only in new)",
         "-", onlyNewIds.count().toString, "-",
-        "Extra",
-        idsToStr(onlyNewIds)),
+        "ONLY_IN_NEW",
+        idsToStr(onlyNewIds),
+        "different_records"),
 
-      SummaryRow("Total Records",
+      SummaryRow("total records",
         totalRowsRef.toString,
         totalRowsNew.toString,
         "100.0%",
         signed(totalRowsNew - totalRowsRef),
+        "-",
         "-")
     )
 
-    /* 6) Convierte a DF y ordena -------------------------------------- */
-    val summaryDf = spark.createDataset(rows).toDF()
+    /* 5) Orden y salida ------------------------------------------------ */
+    val df = spark.createDataset(rows).toDF()
       .withColumn("partition_hour", lit(partitionHour))
-
-    summaryDf
       .withColumn("_o",
-        when($"Metrica"==="Exact Duplicates",1)
-        .when($"Metrica"==="Duplicates with Variations (ref)",2)
-        .when($"Metrica"==="Duplicates with Variations (new)",3)
-        .when($"Metrica"==="1:1 Exact Matches",4)
-        .when($"Metrica"==="1:1 Matches variations",5)
-        .when($"Metrica"==="1:0 (Only in Reference)",6)
-        .when($"Metrica"==="0:1 (Only in New)",7)
+        when($"metrica"==="exact duplicates",1)
+        .when($"metrica"==="duplicates with variations (ref)",2)
+        .when($"metrica"==="duplicates with variations (new)",3)
+        .when($"metrica"==="1:1 exact matches",4)
+        .when($"metrica"==="1:1 matches variations",5)
+        .when($"metrica"==="1:0 (only in reference)",6)
+        .when($"metrica"==="0:1 (only in new)",7)
         .otherwise(8))
-      .orderBy("_o")
-      .drop("_o")
+
+    df.orderBy("_o").drop("_o")
   }
 }

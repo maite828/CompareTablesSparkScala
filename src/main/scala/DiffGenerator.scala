@@ -8,7 +8,7 @@ object DiffGenerator {
   private def formatString(c: Column): Column =
     when(trim(c) === "" || c.isNull, lit("-")).otherwise(c.cast("string"))
 
-  /** Genera la tabla de diferencias entre refDf y newDf. */
+  /** Genera la tabla customer_differences (todo en minúsculas) */
   def generateDifferencesTable(
       spark: SparkSession,
       refDf: DataFrame,
@@ -21,11 +21,11 @@ object DiffGenerator {
 
     import spark.implicits._
 
-    /* 0)  NO filtramos claves nulas → todas las filas cuentan           */
+    /* 0) Sin filtrar claves nulas ------------------------------------- */
     val refClean = refDf
     val newClean = newDf
 
-    /* 1) Columnas a comparar (sin la clave) --------------------------- */
+    /* 1) Columnas a comparar (sin clave) ------------------------------ */
     val compareCols = compareColsIn.filterNot(compositeKeyCols.contains)
 
     /* 2) Agregación determinista por clave ---------------------------- */
@@ -51,10 +51,10 @@ object DiffGenerator {
       .reduce(_ && _)
 
     val joined = refAgg.join(newAgg, joinCond, "fullouter")
-      .withColumn("exists_ref",  col("ref._present").isNotNull)
-      .withColumn("exists_new",  col("new._present").isNotNull)
+      .withColumn("exists_ref", col("ref._present").isNotNull)
+      .withColumn("exists_new", col("new._present").isNotNull)
 
-    /* 4) Construir struct resultado por columna ----------------------- */
+    /* 4) Struct resultado por columna --------------------------------- */
     val diffsPerCol = compareCols.map { c =>
       val refCol = col(s"ref.$c")
       val newCol = col(s"new.$c")
@@ -64,7 +64,7 @@ object DiffGenerator {
         .when(refCol <=> newCol,      lit("MATCH"))
         .otherwise                   (lit("NO_MATCH"))
 
-      val idExpr: Column = {
+      val idExpr = {
         val base =
           if (compositeKeyCols.length == 1)
             coalesce(col(s"ref.${compositeKeyCols.head}"),
@@ -79,10 +79,10 @@ object DiffGenerator {
 
       struct(
         idExpr.as("id"),
-        lit(c).as("Column"),
+        lit(c).as("column"),           // ← minúsculas
         formatString(refCol).as("value_ref"),
         formatString(newCol).as("value_new"),
-        result.as("Results")
+        result.as("results")           // ← minúsculas
       )
     }
 
@@ -95,6 +95,6 @@ object DiffGenerator {
 
     /* 6) Incluir / excluir MATCH -------------------------------------- */
     if (includeEquals) exploded
-    else               exploded.filter($"Results" =!= "MATCH")
+    else               exploded.filter($"results" =!= "MATCH")
   }
 }
