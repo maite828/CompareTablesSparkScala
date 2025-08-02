@@ -1,6 +1,9 @@
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions._
 import java.time.LocalDate
+import org.apache.spark.sql.SaveMode
+import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.spark.sql.catalyst.TableIdentifier
 
 object TableComparisonController {
 
@@ -11,124 +14,122 @@ object TableComparisonController {
     partitionSpec: Option[String],
     compositeKeyCols: Seq[String],
     ignoreCols: Seq[String],
-    initiativeName: String,  // Nombre de la iniciativa (ej: "Swift")
+    initiativeName: String,
     tablePrefix: String = "default.result_",
     checkDuplicates: Boolean = true,
     includeEqualsInDiff: Boolean = true,
-    executionDate: String = LocalDate.now().toString, // Fecha de ejecución (ej: "2025-08-02")
+    executionDate: String = LocalDate.now().toString,
     autoCreateTables: Boolean = true
   ): Unit = {
 
-    // Nombres de tablas con prefijo (sin "customer_" para simplificar)
+    // Nombres de tablas
     val diffTableName = s"${tablePrefix}differences"
     val summaryTableName = s"${tablePrefix}summary"
     val duplicatesTableName = s"${tablePrefix}duplicates"
 
-    // Creación automática de tablas si está habilitado
-    if (autoCreateTables) {
-      createResultTables(spark, diffTableName, summaryTableName, duplicatesTableName)
-    }
+    // Eliminar y recrear tablas de resultados
+    cleanAndPrepareTables(spark, diffTableName, summaryTableName, duplicatesTableName)
 
     // Cargar datos con partición
     val refDf = loadDataWithPartition(spark, refTable, partitionSpec)
     val newDf = loadDataWithPartition(spark, newTable, partitionSpec)
 
-    // Generación de resultados con columnas adicionales para particionamiento
+    // Generar tabla de diferencias
     val diffDf = DiffGenerator.generateDifferencesTable(
       spark, refDf, newDf, compositeKeyCols, 
       refDf.columns.filterNot(ignoreCols.contains), 
       executionDate, includeEqualsInDiff
     )
-    .withColumn("initiative", lit(initiativeName))
-    .withColumn("execution_date", lit(executionDate))
+    
+    // Escribir tabla de diferencias con columnas adicionales
+    writeResultTable(
+      spark, diffTableName, diffDf,
+      Seq("id", "column", "value_ref", "value_new", "results"),
+      initiativeName, executionDate
+    )
 
-    // Escribir resultados con particionamiento compuesto
-    diffDf.write
-      .partitionBy("initiative", "execution_date")
-      .mode("append")
-      .saveAsTable(diffTableName)
-
-    // Procesamiento de duplicados
+    // Procesar duplicados si está habilitado
     if (checkDuplicates) {
       val dupDf = DuplicateDetector.detectDuplicatesTable(
         spark, refDf, newDf, compositeKeyCols, executionDate
       )
-      .withColumn("initiative", lit(initiativeName))
-      .withColumn("execution_date", lit(executionDate))
-
-      if (!dupDf.isEmpty) {
-        dupDf.write
-          .partitionBy("initiative", "execution_date")
-          .mode("append")
-          .saveAsTable(duplicatesTableName)
-      }
+      
+      writeResultTable(
+        spark, duplicatesTableName, dupDf,
+        Seq("origin", "id", "exact_duplicates", "duplicates_w_variations", "occurrences", "variations"),
+        initiativeName, executionDate
+      )
     }
 
-    // Generación de resumen
+    // Generar tabla de resumen
     val summaryDf = SummaryGenerator.generateSummaryTable(
       spark, refDf, newDf, diffDf, 
       if (checkDuplicates) spark.table(duplicatesTableName) else spark.emptyDataFrame,
       compositeKeyCols, executionDate, refDf, newDf
     )
-    .withColumn("initiative", lit(initiativeName))
-    .withColumn("execution_date", lit(executionDate))
-
-    summaryDf.write
-      .partitionBy("initiative", "execution_date")
-      .mode("append")
-      .saveAsTable(summaryTableName)
+    
+    writeResultTable(
+      spark, summaryTableName, summaryDf,
+      Seq("metrica", "total_ref", "total_new", "pct_ref", "status", "examples", "table"),
+      initiativeName, executionDate
+    )
   }
 
-  private def createResultTables(
+  private def cleanAndPrepareTables(
       spark: SparkSession,
-      diffTableName: String,
-      summaryTableName: String,
-      duplicatesTableName: String
+      tableNames: String*
   ): Unit = {
-    // Tabla de diferencias
-    spark.sql(s"DROP TABLE IF EXISTS $diffTableName")
-    spark.sql(s"""
-      CREATE TABLE IF NOT EXISTS $diffTableName (
-        id STRING,
-        column STRING,
-        value_ref STRING,
-        value_new STRING,
-        results STRING
-      )
-      PARTITIONED BY (initiative STRING, execution_date STRING)
-      STORED AS PARQUET
-    """)
+    tableNames.foreach { fullTableName =>
+      try {
+        val parts = fullTableName.split('.')
+        val (db, table) = if (parts.length > 1) (parts(0), parts(1)) else ("default", parts(0))
+        val tableIdentifier = TableIdentifier(table, Some(db))
+        
+        // 1. Eliminar la tabla si existe
+        spark.sql(s"DROP TABLE IF EXISTS $fullTableName PURGE")
+        
+        // 2. Eliminar la ubicación física si existe
+        val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
+        val catalog = spark.sessionState.catalog
+        
+        val tableLocation = if (catalog.tableExists(tableIdentifier)) {
+          catalog.getTableMetadata(tableIdentifier).location
+        } else {
+          catalog.defaultTablePath(tableIdentifier)
+        }
+        
+        val path = new Path(tableLocation.toString)
+        if (fs.exists(path)) {
+          fs.delete(path, true)
+          println(s"Eliminada ubicación física: $path")
+        }
+      } catch {
+        case e: Exception =>
+          println(s"Advertencia: Error al limpiar tabla $fullTableName - ${e.getMessage}")
+      }
+    }
+  }
 
-    // Tabla de resumen
-    spark.sql(s"DROP TABLE IF EXISTS $summaryTableName")
-    spark.sql(s"""
-      CREATE TABLE IF NOT EXISTS $summaryTableName (
-        metrica STRING,
-        total_ref STRING,
-        total_new STRING,
-        pct_ref STRING,
-        status STRING,
-        examples STRING,
-        table STRING
-      )
-      PARTITIONED BY (initiative STRING, execution_date STRING)
-      STORED AS PARQUET
-    """)
+  private def writeResultTable(
+      spark: SparkSession,
+      tableName: String,
+      df: DataFrame,
+      columns: Seq[String],
+      initiativeName: String,
+      executionDate: String
+  ): DataFrame = {
+    // Añadir columnas de particionamiento al DataFrame
+    val resultDf = df
+      .withColumn("initiative", lit(initiativeName))
+      .withColumn("execution_date", lit(executionDate))
 
-    // Tabla de duplicados
-    spark.sql(s"DROP TABLE IF EXISTS $duplicatesTableName")
-    spark.sql(s"""
-      CREATE TABLE IF NOT EXISTS $duplicatesTableName (
-        origin STRING,
-        id STRING,
-        exact_duplicates STRING,
-        duplicates_w_variations STRING,
-        occurrences STRING,
-        variations STRING
-      )
-      PARTITIONED BY (initiative STRING, execution_date STRING)
-      STORED AS PARQUET
-    """)
+    // Escribir la tabla
+    resultDf.write
+      .partitionBy("initiative", "execution_date")
+      .mode(SaveMode.Overwrite)
+      .saveAsTable(tableName)
+    
+    resultDf
   }
 
   private def loadDataWithPartition(
