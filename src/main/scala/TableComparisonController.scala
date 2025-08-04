@@ -1,56 +1,62 @@
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.{DataFrame, SparkSession, SaveMode}
 import org.apache.spark.sql.functions._
-import java.time.LocalDate
-import org.apache.spark.sql.SaveMode
-import org.apache.hadoop.fs.{FileSystem, Path}
-import org.apache.spark.sql.catalyst.TableIdentifier
 
 object TableComparisonController {
 
   /**
    * Ejecuta la comparación de tablas.
    *
-   * @param partitionSpec  cadena con uno o varios pares clave=valor (cualquier orden),
-   *                       p.ej: -data_date_part="2025-07-01"/geo="ES"/process_group="pseudo"
+   * Requisitos cubiertos:
+   *  - Crea tablas de resultados si no existen (sin borrar histórico).
+   *  - Overwrite dinámico: sólo sustituye la partición (initiative, data_date_part)
+   *    de la ejecución actual; el resto del histórico se mantiene.
+   *  - Aplica todos los filtros presentes en partitionSpec que existan en la tabla.
+   *
+   * @param partitionSpec  Cadena con pares clave=valor (cualquier orden),
+   *                       p.ej: data_date_part="2025-07-01"/geo="ES"/...
    */
   def run(
-    spark: SparkSession,
-    refTable: String,
-    newTable: String,
-    partitionSpec: Option[String],
-    compositeKeyCols: Seq[String],
-    ignoreCols: Seq[String],
-    initiativeName: String,
-    tablePrefix: String = "default.result_",
-    checkDuplicates: Boolean = true,
-    includeEqualsInDiff: Boolean = true,
-    autoCreateTables: Boolean = true
+      spark: SparkSession,
+      refTable: String,
+      newTable: String,
+      partitionSpec: Option[String],
+      compositeKeyCols: Seq[String],
+      ignoreCols: Seq[String],
+      initiativeName: String,
+      tablePrefix: String = "default.result_",
+      checkDuplicates: Boolean = true,
+      includeEqualsInDiff: Boolean = true,
+      autoCreateTables: Boolean = true
   ): Unit = {
 
-    // 0) Derivar executionDate
-    val executionDate: String = extractExecutionDate(partitionSpec)
-      .getOrElse {
-        throw new IllegalArgumentException(
-          "No se pudo inferir executionDate: falta data_date_part=\"YYYY-MM-DD\" " +
-          "o data_timestamp_part=\"YYYYMMDD...\" en partitionSpec."
-        )
-      }
+    // === Configuración segura para overwrite por partición ===
+    spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+    spark.conf.set("hive.exec.dynamic.partition", "true")
+    spark.conf.set("hive.exec.dynamic.partition.mode", "nonstrict")
+
+    // 0) Derivar executionDate desde partitionSpec
+    val executionDate: String = extractExecutionDate(partitionSpec).getOrElse {
+      throw new IllegalArgumentException(
+        "No se pudo inferir executionDate: falta data_date_part=\"YYYY-MM-DD\" " +
+        "o data_timestamp_part=\"YYYYMMDD...\" en partitionSpec."
+      )
+    }
 
     // 1) Nombres de tablas de salida
     val diffTableName       = s"${tablePrefix}differences"
     val summaryTableName    = s"${tablePrefix}summary"
     val duplicatesTableName = s"${tablePrefix}duplicates"
 
-    // 2) Eliminar y recrear tablas de resultados (si procede)
+    // 2) Crear tablas de resultados si no existen (NO borra histórico)
     if (autoCreateTables) {
-      cleanAndPrepareTables(spark, diffTableName, summaryTableName, duplicatesTableName)
+      ensureResultTables(spark, diffTableName, summaryTableName, duplicatesTableName)
     }
 
-    // 3) Cargar datos aplicando TODAS las claves de la partición (si existen en la tabla)
+    // 3) Cargar datos aplicando TODAS las claves del partitionSpec que existan en la tabla
     val refDf = loadDataWithPartition(spark, refTable, partitionSpec)
     val newDf = loadDataWithPartition(spark, newTable, partitionSpec)
 
-    // 4) Generar tabla de diferencias
+    // 4) Diferencias
     val colsToCompare = refDf.columns.filterNot(ignoreCols.contains)
     val diffDf = DiffGenerator.generateDifferencesTable(
       spark, refDf, newDf, compositeKeyCols, colsToCompare, includeEqualsInDiff
@@ -62,20 +68,19 @@ object TableComparisonController {
       initiativeName, executionDate
     )
 
-    // 5) Duplicados internos
-    val dupDf =
-      if (checkDuplicates) {
-        val d = DuplicateDetector.detectDuplicatesTable(
-          spark, refDf, newDf, compositeKeyCols
-        )
-        writeResultTable(
-          spark, duplicatesTableName, d,
-          Seq("origin", "id", "exact_duplicates", "duplicates_w_variations", "occurrences", "variations"),
-          initiativeName, executionDate
-        )
-      } else spark.emptyDataFrame
+    // 5) Duplicados
+    if (checkDuplicates) {
+      val dups = DuplicateDetector.detectDuplicatesTable(
+        spark, refDf, newDf, compositeKeyCols
+      )
+      writeResultTable(
+        spark, duplicatesTableName, dups,
+        Seq("origin", "id", "exact_duplicates", "duplicates_w_variations", "occurrences", "variations"),
+        initiativeName, executionDate
+      )
+    }
 
-    // 6) Resumen (usa diffDf y, si procede, los duplicados)
+    // 6) Resumen
     val summaryDf = SummaryGenerator.generateSummaryTable(
       spark, refDf, newDf, diffDf,
       if (checkDuplicates) spark.table(duplicatesTableName) else spark.emptyDataFrame,
@@ -90,14 +95,98 @@ object TableComparisonController {
   }
 
   // -------------------------------------------------------------------
-  // Helpers
+  // Crea tablas de resultados si no existen (sin borrar nada)
+  // -------------------------------------------------------------------
+  private def ensureResultTables(
+      spark: SparkSession,
+      diffTableName: String,
+      summaryTableName: String,
+      duplicatesTableName: String
+  ): Unit = {
+
+    // Backticks para nombres potencialmente reservados (`column`, `table`)
+    val diffDDL =
+      s"""
+         |CREATE TABLE IF NOT EXISTS $diffTableName (
+         |  id STRING,
+         |  `column` STRING,
+         |  value_ref STRING,
+         |  value_new STRING,
+         |  results STRING
+         |)
+         |PARTITIONED BY (initiative STRING, data_date_part STRING)
+         |STORED AS PARQUET
+       """.stripMargin
+
+    val summaryDDL =
+      s"""
+         |CREATE TABLE IF NOT EXISTS $summaryTableName (
+         |  metrica   STRING,
+         |  total_ref STRING,
+         |  total_new STRING,
+         |  pct_ref   STRING,
+         |  status    STRING,
+         |  examples  STRING,
+         |  `table`   STRING
+         |)
+         |PARTITIONED BY (initiative STRING, data_date_part STRING)
+         |STORED AS PARQUET
+       """.stripMargin
+
+    val duplicatesDDL =
+      s"""
+         |CREATE TABLE IF NOT EXISTS $duplicatesTableName (
+         |  origin STRING,
+         |  id STRING,
+         |  exact_duplicates STRING,
+         |  duplicates_w_variations STRING,
+         |  occurrences STRING,
+         |  variations STRING
+         |)
+         |PARTITIONED BY (initiative STRING, data_date_part STRING)
+         |STORED AS PARQUET
+       """.stripMargin
+
+    spark.sql(diffDDL)
+    spark.sql(summaryDDL)
+    spark.sql(duplicatesDDL)
+  }
+
+  // -------------------------------------------------------------------
+  // ESCRITURA: overwrite dinámico SOLO de la partición (initiative, data_date_part)
+  // -------------------------------------------------------------------
+  private def writeResultTable(
+      spark: SparkSession,
+      tableName: String,
+      df: DataFrame,
+      columns: Seq[String],
+      initiativeName: String,
+      executionDate: String
+  ): DataFrame = {
+
+    val resultDf = df
+      .withColumn("initiative", lit(initiativeName))
+      .withColumn("data_date_part", lit(executionDate))
+
+    // Overwrite dinámico: sustituye sólo la partición escrita
+    resultDf
+      .repartition(col("initiative"), col("data_date_part"))
+      .write
+      .mode(SaveMode.Overwrite)   // con partitionOverwriteMode=dynamic
+      .insertInto(tableName)      // requiere que la tabla exista (ensureResultTables)
+
+    resultDf
+  }
+
+  // -------------------------------------------------------------------
+  // Helpers de partición
   // -------------------------------------------------------------------
 
   /**
    * Extrae executionDate en formato "YYYY-MM-DD" desde partitionSpec.
    * - Prioriza data_date_part="YYYY-MM-DD".
-   * - Si no está, intenta data_timestamp_part="YYYYMMDD..." → formatea YYYY-MM-DD con los 8 primeros dígitos.
-   * - Soporta separadores '/', comillas, guiones iniciales, y también formato "[col=val]".
+   * - Si no está, intenta data_timestamp_part="YYYYMMDD..." → YYYY-MM-DD.
+   * - Soporta separadores '/', comillas, y formato "[col=val]".
    */
   private def extractExecutionDate(partitionSpecOpt: Option[String]): Option[String] = {
     partitionSpecOpt.flatMap { specRaw =>
@@ -120,7 +209,7 @@ object TableComparisonController {
    * Parsea un partitionSpec con múltiples pares clave=valor y devuelve un Map.
    * Acepta comillas y/o valores sin comillas; separadores como '/', espacios, etc.
    * Ejemplos válidos:
-   *   -data_date_part="2025-07-01"/geo="ES"/process_group="pseudo"
+   *   data_date_part="2025-07-01"/geo="ES"/process_group="pseudo"
    *   [partition_date=2025-07-25]
    */
   private def parseKeyValuePairs(specRaw: String): Map[String, String] = {
@@ -140,7 +229,7 @@ object TableComparisonController {
 
   /**
    * Carga una tabla y aplica TODOS los filtros presentes en partitionSpec
-   * (solo para columnas existentes en la tabla, el resto se ignora con aviso).
+   * (solo para columnas existentes en la tabla; el resto se ignora con aviso).
    */
   private def loadDataWithPartition(
       spark: SparkSession,
@@ -156,7 +245,6 @@ object TableComparisonController {
           throw new IllegalArgumentException(s"partitionSpec vacío o inválido: '$spec'")
         }
 
-        // Aplicar únicamente filtros para columnas existentes
         val existing = base.columns.toSet
         val (applied, skipped) = kvs.partition { case (k, _) => existing.contains(k) }
 
@@ -172,65 +260,6 @@ object TableComparisonController {
 
       case None =>
         throw new IllegalArgumentException("Se requiere especificación de partición")
-    }
-  }
-
-  /**
-   * Escribe una tabla de resultados, añadiendo particiones (initiative, execution_date).
-   */
-  private def writeResultTable(
-      spark: SparkSession,
-      tableName: String,
-      df: DataFrame,
-      columns: Seq[String],              // columnas núcleo a conservar (se ignora si df ya las trae)
-      initiativeName: String,
-      executionDate: String
-  ): DataFrame = {
-    val resultDf = df
-      .withColumn("initiative", lit(initiativeName))
-      .withColumn("execution_date", lit(executionDate))
-
-    resultDf.write
-      .partitionBy("initiative", "execution_date")
-      .mode(SaveMode.Overwrite)
-      .saveAsTable(tableName)
-
-    resultDf
-  }
-
-  /**
-   * Elimina tablas de salida y sus ubicaciones físicas (si existen).
-   */
-  private def cleanAndPrepareTables(
-      spark: SparkSession,
-      tableNames: String*
-  ): Unit = {
-    tableNames.foreach { fullTableName =>
-      try {
-        val parts = fullTableName.split('.')
-        val (db, table) = if (parts.length > 1) (parts(0), parts(1)) else ("default", parts(0))
-        val tableIdentifier = TableIdentifier(table, Some(db))
-
-        // 1) Borrar tabla si existe
-        spark.sql(s"DROP TABLE IF EXISTS $fullTableName PURGE")
-
-        // 2) Borrar ubicación física si existe
-        val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
-        val catalog = spark.sessionState.catalog
-
-        val tableLocation =
-          if (catalog.tableExists(tableIdentifier)) catalog.getTableMetadata(tableIdentifier).location
-          else catalog.defaultTablePath(tableIdentifier)
-
-        val path = new Path(tableLocation.toString)
-        if (fs.exists(path)) {
-          fs.delete(path, true)
-          println(s"Eliminada ubicación física: $path")
-        }
-      } catch {
-        case e: Exception =>
-          println(s"Advertencia: Error al limpiar tabla $fullTableName - ${e.getMessage}")
-      }
     }
   }
 }

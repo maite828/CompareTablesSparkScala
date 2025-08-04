@@ -2,6 +2,8 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
+import org.apache.hadoop.fs.{FileSystem, Path}
+import org.apache.spark.sql.catalyst.TableIdentifier
 
 object Main {
   def main(args: Array[String]): Unit = {
@@ -60,9 +62,17 @@ object Main {
       println(s"✅ Tablas ref_customers y new_customers (particiones: data_date_part, geo) creadas")
       println(s"✅ Iniciativa: $initiativeName")
       println(s"✅ PartitionSpec usado: ${partitionSpec.getOrElse("-")}")
-      println(s"✅ (execution_date esperado en resultados): $dataDatePart")
+      println(s"✅ (data_date_part esperado en resultados): $dataDatePart")
 
-      // 5) Ejecutar comparación (el Controller extraerá execution_date = dataDatePart desde partitionSpec)
+      // 4.1) Nombres de tablas de salida
+      val diffTableName       = s"${tablePrefix}differences"
+      val summaryTableName    = s"${tablePrefix}summary"
+      val duplicatesTableName = s"${tablePrefix}duplicates"
+
+      // 4.2) Eliminar y recrear tablas de resultados (si procede)
+      cleanAndPrepareTables(spark, diffTableName, summaryTableName, duplicatesTableName)
+
+      // 5) Ejecutar comparación (el Controller extraerá data_date_part = dataDatePart desde partitionSpec)
       TableComparisonController.run(
         spark = spark,
         refTable = "default.ref_customers",
@@ -74,16 +84,17 @@ object Main {
         tablePrefix = tablePrefix,
         checkDuplicates = true,
         includeEqualsInDiff = true
-        // executionDateOpt = None  // opcional; si no lo pasas, el Controller lo infiere del partitionSpec
       )
 
-      // 6) Mostrar resultados (execution_date = dataDatePart)
+      // 6) Mostrar resultados (data_date_part = dataDatePart)
       showComparisonResults(spark, tablePrefix, initiativeName, dataDatePart)
 
     } finally {
       spark.stop()
     }
   }
+
+
 
   /** Crea los DataFrames de prueba e incluye las columnas de partición (data_date_part, geo). */
   private def createTestDataFrames(
@@ -134,6 +145,8 @@ object Main {
     (refDF, newDF)
   }
 
+
+
   /** Crea las tablas de origen con particiones (data_date_part, geo) y escribe los datos. */
   private def createAndLoadSourceTables(
       spark: SparkSession,
@@ -169,9 +182,52 @@ object Main {
         |STORED AS PARQUET
       """.stripMargin)
     newDF.write.mode("overwrite").insertInto("default.new_customers")
+
   }
 
-  /** Muestra resultados filtrando por initiative y execution_date (que será dataDatePart). */
+
+    /**
+   * Elimina tablas de salida y sus ubicaciones físicas (si existen).
+   */
+  private def cleanAndPrepareTables(
+      spark: SparkSession,
+      tableNames: String*
+  ): Unit = {
+    tableNames.foreach { fullTableName =>
+      try {
+        val parts = fullTableName.split('.')
+        val (db, table) = if (parts.length > 1) (parts(0), parts(1)) else ("default", parts(0))
+        val tableIdentifier = TableIdentifier(table, Some(db))
+
+        // 1) Borrar tabla si existe
+        spark.sql(s"DROP TABLE IF EXISTS $fullTableName PURGE")
+
+        // 2) Borrar ubicación física si existe
+        val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
+        val catalog = spark.sessionState.catalog
+
+        val tableLocation =
+          if (catalog.tableExists(tableIdentifier)) catalog.getTableMetadata(tableIdentifier).location
+          else catalog.defaultTablePath(tableIdentifier)
+
+        val path = new Path(tableLocation.toString)
+        if (fs.exists(path)) {
+          fs.delete(path, true)
+          println(s"Eliminada ubicación física: $path")
+        }
+      } catch {
+        case e: Exception =>
+          println(s"Advertencia: Error al limpiar tabla $fullTableName - ${e.getMessage}")
+      }
+    }
+  }
+
+
+
+
+
+  
+  /** Muestra resultados filtrando por initiative y data_date_part (que será dataDatePart). */
   private def showComparisonResults(
       spark: SparkSession,
       tablePrefix: String,
@@ -183,7 +239,7 @@ object Main {
     val duplicatesTable = s"${tablePrefix}duplicates"
 
     def queryWithPartition(table: String) =
-      s"SELECT * FROM $table WHERE initiative = '$initiativeName' AND execution_date = '$executionDate'"
+      s"SELECT * FROM $table WHERE initiative = '$initiativeName' AND data_date_part = '$executionDate'"
 
     println("\n==== Tablas Hive disponibles ====")
     spark.sql("SHOW TABLES").show(false)
