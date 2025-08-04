@@ -25,7 +25,6 @@ object SummaryGenerator {
       diffDf: DataFrame,     // usamos diffDf para MATCH/NO_MATCH
       dupDf: DataFrame,
       compositeKeyCols: Seq[String],
-      partitionHour: String,
       refDfRaw: DataFrame,
       newDfRaw: DataFrame
   ): DataFrame = {
@@ -149,7 +148,6 @@ object SummaryGenerator {
 
     /* 5) Orden y salida ------------------------------------------------ */
     val df = spark.createDataset(rows).toDF()
-      .withColumn("partition_hour", lit(partitionHour))
       .withColumn("_o",
         when($"metrica"==="exact duplicates",1)
         .when($"metrica"==="duplicates with variations (ref)",2)

@@ -2,17 +2,15 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
-import java.time.LocalDate
-import java.time.format.DateTimeFormatter
 
 object Main {
   def main(args: Array[String]): Unit = {
-    // Configuración para evitar errores de Hadoop
+    // Configuración mínima para entorno local y metastore
     System.setProperty("hadoop.home.dir", "/tmp/hadoop-dummy")
     System.setProperty("spark.hadoop.validateOutputSpecs", "false")
     System.setProperty("spark.sql.warehouse.dir", "/tmp/spark-warehouse")
 
-    // Solución alternativa compatible para ShutdownHookManager
+    // (Opcional) Desactivar hooks de Hadoop si molestan en local
     try {
       val manager = org.apache.hadoop.util.ShutdownHookManager.get()
       val hooksField = manager.getClass.getDeclaredField("hooks")
@@ -22,7 +20,7 @@ object Main {
       case e: Exception =>
         println(s"Advertencia: No se pudieron deshabilitar los hooks de Hadoop: ${e.getMessage}")
     }
-    
+
     val spark = SparkSession.builder()
       .appName("CompareTablesMain")
       .master("local[*]")
@@ -32,12 +30,16 @@ object Main {
     try {
       import spark.implicits._
 
-      val partitionDate = "2025-07-25"
-      val executionDate = LocalDate.now().toString
-      val initiativeName = "Swift"  // Nombre de la iniciativa
-      val tablePrefix = "default.result_"  // Prefijo para las tablas de resultados
+      // ==== NUEVOS PARÁMETROS DE PARTICIÓN ====
+      val dataDatePart = "2025-07-01"
+      val geoPart      = "ES"
+      // Ejemplo de partitionSpec con múltiples claves (el parser del Controller soporta orden libre)
+      val partitionSpec = Some(s"""data_date_part="$dataDatePart"/geo="$geoPart" """.trim)
 
-      // 1. Definir el esquema
+      val initiativeName = "Swift"                  // Nombre de la iniciativa
+      val tablePrefix    = "default.result_"        // Prefijo para tablas de resultados
+
+      // 1) Esquema de datos
       val customSchema = StructType(Seq(
         StructField("id", IntegerType, nullable = true),
         StructField("country", StringType, nullable = true),
@@ -45,49 +47,51 @@ object Main {
         StructField("status", StringType, nullable = true)
       ))
 
-      // 2. Crear DataFrames de prueba
-      val (refDF, newDF) = createTestDataFrames(spark, customSchema, partitionDate)
+      // 2) Crear DataFrames de prueba (con columnas de partición nuevas)
+      val (refDF, newDF) = createTestDataFrames(spark, customSchema, dataDatePart, geoPart)
 
-      // 3. Configuración para particiones dinámicas
+      // 3) Configuración para particiones dinámicas
       spark.conf.set("hive.exec.dynamic.partition", "true")
       spark.conf.set("hive.exec.dynamic.partition.mode", "nonstrict")
 
-      // 4. Crear y cargar tablas de origen
-      createAndLoadSourceTables(spark, refDF, newDF, partitionDate)
+      // 4) Crear y cargar tablas de origen (particionadas por data_date_part y geo)
+      createAndLoadSourceTables(spark, refDF, newDF)
 
-      println(s"✅ Tablas ref_customers y new_customers con partición creadas")
+      println(s"✅ Tablas ref_customers y new_customers (particiones: data_date_part, geo) creadas")
       println(s"✅ Iniciativa: $initiativeName")
-      println(s"✅ Fecha de ejecución: $executionDate")
+      println(s"✅ PartitionSpec usado: ${partitionSpec.getOrElse("-")}")
+      println(s"✅ (execution_date esperado en resultados): $dataDatePart")
 
-      // 5. Ejecutar comparación
+      // 5) Ejecutar comparación (el Controller extraerá execution_date = dataDatePart desde partitionSpec)
       TableComparisonController.run(
         spark = spark,
         refTable = "default.ref_customers",
         newTable = "default.new_customers",
-        partitionSpec = Some(s"[partition_date=$partitionDate]"),
+        partitionSpec = partitionSpec,
         compositeKeyCols = Seq("id"),
         ignoreCols = Seq("last_update"),
         initiativeName = initiativeName,
         tablePrefix = tablePrefix,
-        executionDate = executionDate,
         checkDuplicates = true,
         includeEqualsInDiff = true
+        // executionDateOpt = None  // opcional; si no lo pasas, el Controller lo infiere del partitionSpec
       )
 
-      // 6. Mostrar resultados
-      showComparisonResults(spark, tablePrefix, initiativeName, executionDate)
+      // 6) Mostrar resultados (execution_date = dataDatePart)
+      showComparisonResults(spark, tablePrefix, initiativeName, dataDatePart)
 
     } finally {
       spark.stop()
     }
   }
 
+  /** Crea los DataFrames de prueba e incluye las columnas de partición (data_date_part, geo). */
   private def createTestDataFrames(
       spark: SparkSession,
       schema: StructType,
-      partitionDate: String
+      dataDatePart: String,
+      geoPart: String
   ): (DataFrame, DataFrame) = {
-    // Datos de referencia
     val refData = Seq(
       Row(1, "US", 100.50, "active"),
       Row(2, "ES", 75.20, "pending"),
@@ -103,7 +107,6 @@ object Main {
       Row(null, "GR", 61.00, "new")
     )
 
-    // Datos nuevos
     val newData = Seq(
       Row(1, "US", 100.49, "active"),
       Row(2, "ES", 75.20, "expired"),
@@ -120,21 +123,22 @@ object Main {
       Row(null, "GR", 60.00, "new")
     )
 
-    // Crear DataFrames con partición
     val refDF = spark.createDataFrame(spark.sparkContext.parallelize(refData), schema)
-      .withColumn("partition_date", lit(partitionDate))
-      
+      .withColumn("data_date_part", lit(dataDatePart))
+      .withColumn("geo", lit(geoPart))
+
     val newDF = spark.createDataFrame(spark.sparkContext.parallelize(newData), schema)
-      .withColumn("partition_date", lit(partitionDate))
+      .withColumn("data_date_part", lit(dataDatePart))
+      .withColumn("geo", lit(geoPart))
 
     (refDF, newDF)
   }
 
+  /** Crea las tablas de origen con particiones (data_date_part, geo) y escribe los datos. */
   private def createAndLoadSourceTables(
       spark: SparkSession,
       refDF: DataFrame,
-      newDF: DataFrame,
-      partitionDate: String
+      newDF: DataFrame
   ): Unit = {
     // Tabla de referencia
     spark.sql("DROP TABLE IF EXISTS default.ref_customers")
@@ -146,7 +150,7 @@ object Main {
         |  amount DOUBLE,
         |  status STRING
         |)
-        |PARTITIONED BY (partition_date STRING)
+        |PARTITIONED BY (data_date_part STRING, geo STRING)
         |STORED AS PARQUET
       """.stripMargin)
     refDF.write.mode("overwrite").insertInto("default.ref_customers")
@@ -155,43 +159,42 @@ object Main {
     spark.sql("DROP TABLE IF EXISTS default.new_customers")
     spark.sql(
       """
-        |CREATE TABLE default.new_customers (
+        |CREATE TABLE IF NOT EXISTS default.new_customers (
         |  id INT,
         |  country STRING,
         |  amount DOUBLE,
         |  status STRING
         |)
-        |PARTITIONED BY (partition_date STRING)
+        |PARTITIONED BY (data_date_part STRING, geo STRING)
         |STORED AS PARQUET
       """.stripMargin)
     newDF.write.mode("overwrite").insertInto("default.new_customers")
   }
 
+  /** Muestra resultados filtrando por initiative y execution_date (que será dataDatePart). */
   private def showComparisonResults(
       spark: SparkSession,
       tablePrefix: String,
       initiativeName: String,
       executionDate: String
   ): Unit = {
-    // Nombres de las tablas de resultados
-    val diffTable = s"${tablePrefix}differences"
-    val summaryTable = s"${tablePrefix}summary"
+    val diffTable       = s"${tablePrefix}differences"
+    val summaryTable    = s"${tablePrefix}summary"
     val duplicatesTable = s"${tablePrefix}duplicates"
 
-    // Consulta con filtro por iniciativa y fecha
-    def queryWithPartition(table: String) = 
+    def queryWithPartition(table: String) =
       s"SELECT * FROM $table WHERE initiative = '$initiativeName' AND execution_date = '$executionDate'"
 
     println("\n==== Tablas Hive disponibles ====")
     spark.sql("SHOW TABLES").show(false)
 
     println(s"\n==== Diferencias ($diffTable) ====")
-    spark.sql(queryWithPartition(diffTable)).show(20, false)
+    spark.sql(queryWithPartition(diffTable)).show(100, false)
 
     println(s"\n==== Resumen comparativo ($summaryTable) ====")
-    spark.sql(queryWithPartition(summaryTable)).show(false)
+    spark.sql(queryWithPartition(summaryTable)).show(100, false)
 
     println(s"\n==== Duplicados ($duplicatesTable) ====")
-    spark.sql(queryWithPartition(duplicatesTable)).show(false)
+    spark.sql(queryWithPartition(duplicatesTable)).show(100, false)
   }
 }

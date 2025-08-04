@@ -15,7 +15,6 @@ object DiffGenerator {
       newDf: DataFrame,
       compositeKeyCols: Seq[String],
       compareColsIn: Seq[String],
-      partitionHour: String,
       includeEquals: Boolean
   ): DataFrame = {
 
@@ -79,10 +78,10 @@ object DiffGenerator {
 
       struct(
         idExpr.as("id"),
-        lit(c).as("column"),           // ← minúsculas
+        lit(c).as("column"),
         formatString(refCol).as("value_ref"),
         formatString(newCol).as("value_new"),
-        result.as("results")           // ← minúsculas
+        result.as("results")
       )
     }
 
@@ -91,7 +90,6 @@ object DiffGenerator {
       .select(array(diffsPerCol: _*).as("diffs"))
       .withColumn("d", explode($"diffs"))
       .select("d.*")
-      .withColumn("partition_hour", lit(partitionHour))
 
     /* 6) Incluir / excluir MATCH -------------------------------------- */
     if (includeEquals) exploded

@@ -9,8 +9,7 @@ case class DuplicateOut(
   exact_duplicates: String,       // total - countDistinct(hash)
   duplicates_w_variations: String,// max(countDistinct(hash) - 1, 0)
   occurrences: String,            // total del grupo
-  variations: String,             // campo: [v1,v2] | ...
-  partition_hour: String
+  variations: String             // campo: [v1,v2] | ...
 )
 
 object DuplicateDetector {
@@ -20,8 +19,7 @@ object DuplicateDetector {
       spark: SparkSession,
       refDf: DataFrame,
       newDf: DataFrame,
-      compositeKeyCols: Seq[String],
-      partitionHour: String
+      compositeKeyCols: Seq[String]
   ): DataFrame = {
 
     import spark.implicits._
@@ -79,8 +77,7 @@ object DuplicateDetector {
         exact_duplicates         = r.getAs[Long]("exact_dup").toString,
         duplicates_w_variations  = r.getAs[Long]("var_dup").toString,
         occurrences              = r.getAs[Long]("occurrences").toString,
-        variations               = variationParts.mkString(" | ").ifEmpty("-"),
-        partition_hour           = partitionHour
+        variations               = variationParts.mkString(" | ").ifEmpty("-")
       )
     }(Encoders.product[DuplicateOut]).toDF()
   }
