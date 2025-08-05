@@ -83,7 +83,7 @@ object Main {
         initiativeName = initiativeName,
         tablePrefix = tablePrefix,
         checkDuplicates = true,
-        includeEqualsInDiff = true
+        includeEqualsInDiff = false
       )
 
       // 6) Mostrar resultados (data_date_part = dataDatePart)
@@ -109,7 +109,7 @@ object Main {
       Row(3, "MX", 150.00, "active"),
       Row(4, "FR", 200.00, "new"),
       Row(4, "BR", 201.00, "new"),
-      //Row(5, "FR", 300.00, "active"),
+      Row(5, "FR", 300.00, "active"),
       Row(5, "FR", 300.50, "active"),
       Row(7, "PT", 300.50, "active"),
       Row(8, "BR", 100.50, "pending"),
@@ -120,19 +120,22 @@ object Main {
     )
 
     val newData = Seq(
-      Row(1, "US", 100.50, "active"),
-      Row(2, "ES", 75.20, "pending"),
-      Row(3, "MX", 150.00, "active"),
-      Row(4, "FR", 200.00, "new"),
+      Row(1, "US", 100.49, "active"),
+      Row(2, "ES", 75.20, "expired"),
       Row(4, "BR", 201.00, "new"),
-      //Row(5, "FR", 300.00, "active"),
-      Row(5, "FR", 300.50, "active"),
-      Row(7, "PT", 300.50, "active"),
-      Row(8, "BR", 100.50, "pending"),
-      Row(9, "AN", 80.00, "new"),
-      Row(10, "GR", 60.00, "new"),
-      Row(null, "GR", 61.00, "new"),
+      Row(4, "BR", 200.00, "new"),
+      Row(4, "BR", 200.00, "new"),
+      Row(4, "BR", 200.00, "new"),
+      Row(6, "DE", 400.00, "new"),
+      Row(6, "DE", 400.00, "new"),
+      Row(6, "DE", 400.10, "new"),
+      Row(7, "",   300.50, "active"),
+      Row(8, "BR", null,   "pending"),
+      Row(9, "AN", 80.00,  null),
       Row(null, "GR", 60.00, "new"),
+      Row(null, "GR", 60.00, "new"),
+      Row(null, "GR", 60.00, "new"),
+      Row(null, "GR", 61.00, "new")
     )
 
     val refDF = spark.createDataFrame(spark.sparkContext.parallelize(refData), schema)

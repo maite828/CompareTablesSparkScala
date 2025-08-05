@@ -4,27 +4,43 @@ import org.apache.spark.sql.types._
 
 object DiffGenerator {
 
-  /**
-   * Formatea valores para la salida:
-   * - NULL o vacío → "-"
-   * - Otros valores → string normalizado
-   */
+  private val NULL_KEY_MATCHES: Boolean = true
+
   private def formatString(c: Column): Column = {
     val s = c.cast("string")
     when(s.isNull || trim(s) === "", lit("-")).otherwise(s)
   }
 
-  /**
-   * Genera la tabla de diferencias entre dos DataFrames
-   *
-   * @param spark SparkSession
-   * @param refDf DataFrame de referencia
-   * @param newDf Nuevo DataFrame a comparar
-   * @param compositeKeyCols Columnas que forman la clave compuesta
-   * @param compareColsIn Columnas a comparar (ya filtradas por el controlador)
-   * @param includeEquals Si incluir coincidencias exactas en el resultado
-   * @return DataFrame con las diferencias encontradas
-   */
+  /** Representación canónica determinista para TODAS las comparaciones. */
+  private def canonicalize(c: Column, dt: DataType): Column = dt match {
+    // Numéricos y boolean: usa valor real (max numérico será numérico), luego pásalo a string para comparar
+    case _: NumericType   => c
+    case _: BooleanType   => c
+    case _: DateType      => c
+    case _: TimestampType => c
+
+    // String: recorta espacios (pero respeta mayúsculas/minúsculas)
+    case _: StringType    => when(c.isNull, lit(null)).otherwise(trim(c.cast("string")))
+
+    // Map: ordena entradas por clave antes de serializar a JSON (determinista)
+    case mt: MapType =>
+      val entriesSorted = array_sort(map_entries(c))
+      to_json(map_from_entries(entriesSorted))
+
+    // Array / Struct: JSON es estable (el orden del array forma parte del valor)
+    case _: ArrayType  => to_json(c)
+    case _: StructType => to_json(c)
+
+    // Binary: serializa a base64 para obtener cadena estable
+    case BinaryType     => when(c.isNull, lit(null)).otherwise(encode(c.cast("binary"), "base64"))
+
+    // Fallback: JSON
+    case _              => to_json(c)
+  }
+
+  private def isConstantColumn(df: DataFrame, colName: String): Boolean =
+    df.select(col(colName)).distinct().limit(2).count() <= 1
+
   def generateDifferencesTable(
       spark: SparkSession,
       refDf: DataFrame,
@@ -36,46 +52,33 @@ object DiffGenerator {
 
     import spark.implicits._
 
-    // 1) Normalización de strings vacíos en las claves compuestas → null
     val normalizeEmptyToNull: Column => Column =
       c => when(trim(c.cast("string")) === "", lit(null)).otherwise(c)
 
-    val normalizedRef = compositeKeyCols.foldLeft(refDf) { (df, colName) =>
-      df.withColumn(colName, normalizeEmptyToNull(col(colName)))
-    }
-    val normalizedNew = compositeKeyCols.foldLeft(newDf) { (df, colName) =>
-      df.withColumn(colName, normalizeEmptyToNull(col(colName)))
-    }
+    val normalizedRef = compositeKeyCols.foldLeft(refDf)((df, k) => df.withColumn(k, normalizeEmptyToNull(col(k))))
+    val normalizedNew = compositeKeyCols.foldLeft(newDf)((df, k) => df.withColumn(k, normalizeEmptyToNull(col(k))))
 
-    // 2) Filtrado de columnas constantes (tipo partición) para no comparar basura
-    val baseCols   = compareColsIn.filterNot(compositeKeyCols.contains).distinct
+    val baseCols = compareColsIn.filterNot(compositeKeyCols.contains).distinct
     val commonCols = normalizedRef.columns.toSet.intersect(normalizedNew.columns.toSet)
-    val autoPartitionLike = commonCols.filter { c =>
-      baseCols.contains(c) &&
-      isConstantColumn(normalizedRef, c) &&
-      isConstantColumn(normalizedNew, c)
-    }
-    if (autoPartitionLike.nonEmpty) {
-      println(s"[INFO] Excluyendo columnas constantes: ${autoPartitionLike.mkString(", ")}")
-    }
-    val compareCols = baseCols.filterNot(autoPartitionLike.contains)
+    val constantLike = commonCols.filter(c => baseCols.contains(c) && isConstantColumn(normalizedRef, c) && isConstantColumn(normalizedNew, c))
+    if (constantLike.nonEmpty) println(s"[INFO] Excluyendo columnas constantes: ${constantLike.mkString(", ")}")
+    val compareCols = baseCols.filterNot(constantLike.contains)
 
-    // 3) Agregación por clave compuesta (usar first(ignoreNulls = true) para TODOS los tipos)
     val refAgg = aggregateByCompositeKey(normalizedRef, compositeKeyCols, compareCols).alias("ref")
     val newAgg = aggregateByCompositeKey(normalizedNew, compositeKeyCols, compareCols).alias("new")
 
-    // 4) Join full y banderas de presencia (null-safe en clave)
-    val joinCondition = compositeKeyCols.map(c => col(s"ref.$c") <=> col(s"new.$c")).reduce(_ && _)
-    val joined = refAgg.join(newAgg, joinCondition, "fullouter")
+    val joinCond = compositeKeyCols
+      .map { k =>
+        val l = col(s"ref.$k"); val r = col(s"new.$k")
+        if (NULL_KEY_MATCHES) (l <=> r) else (l.isNotNull && r.isNotNull && l === r)
+      }.reduce(_ && _)
+
+    val joined = refAgg.join(newAgg, joinCond, "fullouter")
       .withColumn("exists_ref", col("ref._present").isNotNull)
       .withColumn("exists_new", col("new._present").isNotNull)
 
-    // 5) Construcción de diffs por columna
-    val diffs = compareCols.map { colName =>
-      buildDiffStruct(compositeKeyCols, colName)
-    }
+    val diffs = compareCols.map(c => buildDiffStruct(compositeKeyCols, c))
 
-    // 6) Explode y filtrado final
     val result = joined
       .select(array(diffs: _*).as("diffs"))
       .withColumn("diff", explode($"diffs"))
@@ -84,55 +87,48 @@ object DiffGenerator {
     if (includeEquals) result else result.filter($"results" =!= "MATCH")
   }
 
-  /** Determina si una columna tiene valores constantes */
-  private def isConstantColumn(df: DataFrame, colName: String): Boolean = {
-    df.select(col(colName)).distinct().limit(2).count() <= 1
-  }
-
-  /** Agrega un DataFrame por sus claves compuestas: usar siempre first(ignoreNulls=true) */
+  /** Agregación determinista por clave: convierte a forma canónica y aplica max. */
   private def aggregateByCompositeKey(
       df: DataFrame,
       keyCols: Seq[String],
       compareCols: Seq[String]
   ): DataFrame = {
-    val aggs = compareCols.map { c =>
-      first(col(c), ignoreNulls = true).as(c)
+    val aggs: Seq[Column] = compareCols.map { c =>
+    val dt = df.schema(c).dataType
+    val canon = canonicalize(col(c), dt)
+
+    dt match {
+      case _: NumericType | _: BooleanType | _: DateType | _: TimestampType =>
+        // max numérico/temporal ⇒ determinista y semántico
+        max(canon.cast(df.schema(c).dataType)).as(c)
+      case _ =>
+        // resto: max lexicográfico sobre la representación canónica
+        max(canon).as(c)
     }
+  }
+
     df.groupBy(keyCols.map(col): _*)
       .agg(aggs.head, aggs.tail: _*)
       .withColumn("_present", lit(1))
   }
 
-  /**
-   * Construye la estructura de diferencias:
-   * - id: coalesce(ref.key, new.key) por componente, y SOLO en visualización null → "NULL"
-   * - value_ref / value_new formateados con "-"
-   * - results: ONLY_IN_REF / ONLY_IN_NEW / MATCH / NO_MATCH
-   */
-  private def buildDiffStruct(
-      keyCols: Seq[String],
-      colName: String
-  ): Column = {
-
+  private def buildDiffStruct(keyCols: Seq[String], colName: String): Column = {
     val refCol = col(s"ref.$colName")
     val newCol = col(s"new.$colName")
 
-    val result = when(!col("exists_new"), lit("ONLY_IN_REF"))
-      .when(!col("exists_ref"), lit("ONLY_IN_NEW"))
-      .when(refCol <=> newCol, lit("MATCH"))
-      .otherwise(lit("NO_MATCH"))
+    val result =
+      when(!col("exists_new"), lit("ONLY_IN_REF"))
+        .when(!col("exists_ref"), lit("ONLY_IN_NEW"))
+        .when(refCol <=> newCol, lit("MATCH"))
+        .otherwise(lit("NO_MATCH"))
 
-    // 1) Combinar valor de clave (ref/new) a nivel de componente SIN usar "NULL" string
-    val mergedKeyParts: Seq[Column] = keyCols.map { k =>
-      coalesce(col(s"ref.$k"), col(s"new.$k"))
-    }
-
-    // 2) Solo para mostrar: null → "NULL"
-    val printableKeyParts: Seq[Column] = mergedKeyParts.map { p =>
-      when(p.isNull, lit("NULL")).otherwise(p.cast("string"))
-    }
-
-    val compositeId = concat_ws("_", printableKeyParts: _*)
+    val compositeId = concat_ws(
+      "_",
+      keyCols.map { k =>
+        val v = coalesce(col(s"ref.$k"), col(s"new.$k"))
+        when(v.isNull, lit("NULL")).otherwise(v.cast("string"))
+      }: _*
+    )
 
     struct(
       compositeId.as("id"),
