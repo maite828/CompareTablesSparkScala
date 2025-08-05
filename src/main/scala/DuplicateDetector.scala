@@ -60,8 +60,10 @@ object DuplicateDetector {
     grouped.map { r =>
       val origin = r.getAs[String]("_src")          // "ref" | "new"
 
-      val idVal  = Option(r.getAs[Any](compositeKeyCols.head)).orNull
-      val idStr  = if (idVal == null) "NULL" else idVal.toString
+      // Construir ID compuesto similar al formato usado en differences (ej: "1_US")
+      val compositeId = compositeKeyCols.map { colName =>
+        Option(r.getAs[Any](colName)).map(_.toString).getOrElse("NULL")
+      }.mkString("_")
 
       val variationParts = nonKeyCols.flatMap { c =>
         val vs = Option(r.getAs[Seq[String]](s"${c}_set"))
@@ -73,7 +75,7 @@ object DuplicateDetector {
 
       DuplicateOut(
         origin                   = origin,
-        id                       = idStr,
+        id                       = compositeId,
         exact_duplicates         = r.getAs[Long]("exact_dup").toString,
         duplicates_w_variations  = r.getAs[Long]("var_dup").toString,
         occurrences              = r.getAs[Long]("occurrences").toString,

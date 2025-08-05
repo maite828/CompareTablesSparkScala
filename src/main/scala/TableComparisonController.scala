@@ -6,14 +6,12 @@ object TableComparisonController {
   /**
    * Ejecuta la comparación de tablas.
    *
-   * Requisitos cubiertos:
-   *  - Crea tablas de resultados si no existen (sin borrar histórico).
-   *  - Overwrite dinámico: sólo sustituye la partición (initiative, data_date_part)
-   *    de la ejecución actual; el resto del histórico se mantiene.
-   *  - Aplica todos los filtros presentes en partitionSpec que existan en la tabla.
-   *
-   * @param partitionSpec  Cadena con pares clave=valor (cualquier orden),
-   *                       p.ej: data_date_part="2025-07-01"/geo="ES"/...
+   * - Crea tablas de resultados si no existen (no borra histórico).
+   * - Overwrite dinámico: sólo sustituye la partición (initiative, data_date_part)
+   *   de la ejecución actual; el resto del histórico se mantiene.
+   * - Aplica todos los filtros presentes en partitionSpec que existan en la tabla.
+   * - EXCLUYE de la comparación de diferencias las claves presentes en partitionSpec
+   *   (p.ej., data_date_part, geo), además de ignoreCols y compositeKeyCols.
    */
   def run(
       spark: SparkSession,
@@ -29,7 +27,7 @@ object TableComparisonController {
       autoCreateTables: Boolean = true
   ): Unit = {
 
-    // === Configuración segura para overwrite por partición ===
+    // Config segura para overwrite por partición
     spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
     spark.conf.set("hive.exec.dynamic.partition", "true")
     spark.conf.set("hive.exec.dynamic.partition.mode", "nonstrict")
@@ -42,7 +40,7 @@ object TableComparisonController {
       )
     }
 
-    // 1) Nombres de tablas de salida
+    // 1) Tablas de salida
     val diffTableName       = s"${tablePrefix}differences"
     val summaryTableName    = s"${tablePrefix}summary"
     val duplicatesTableName = s"${tablePrefix}duplicates"
@@ -57,7 +55,17 @@ object TableComparisonController {
     val newDf = loadDataWithPartition(spark, newTable, partitionSpec)
 
     // 4) Diferencias
-    val colsToCompare = refDf.columns.filterNot(ignoreCols.contains)
+    //    EXCLUIR: ignoreCols, claves de partición del partitionSpec, y compositeKeyCols.
+    val partitionKeys: Set[String] =
+      partitionSpec.map(parseKeyValuePairs).map(_.keys.toSet).getOrElse(Set.empty)
+
+    val candidateCols = refDf.columns.toSeq
+    val colsToCompare: Seq[String] =
+      candidateCols
+        .filterNot(ignoreCols.contains)
+        .filterNot(c => partitionKeys.contains(c))
+        .filterNot(compositeKeyCols.contains)
+
     val diffDf = DiffGenerator.generateDifferencesTable(
       spark, refDf, newDf, compositeKeyCols, colsToCompare, includeEqualsInDiff
     )
@@ -95,7 +103,7 @@ object TableComparisonController {
   }
 
   // -------------------------------------------------------------------
-  // Crea tablas de resultados si no existen (sin borrar nada)
+  // Crear tablas de resultados si no existen (no borra histórico)
   // -------------------------------------------------------------------
   private def ensureResultTables(
       spark: SparkSession,
@@ -104,7 +112,6 @@ object TableComparisonController {
       duplicatesTableName: String
   ): Unit = {
 
-    // Backticks para nombres potencialmente reservados (`column`, `table`)
     val diffDDL =
       s"""
          |CREATE TABLE IF NOT EXISTS $diffTableName (
@@ -121,13 +128,13 @@ object TableComparisonController {
     val summaryDDL =
       s"""
          |CREATE TABLE IF NOT EXISTS $summaryTableName (
-         |  metrica   STRING,
-         |  total_ref STRING,
-         |  total_new STRING,
-         |  pct_ref   STRING,
-         |  status    STRING,
-         |  examples  STRING,
-         |  `table`   STRING
+         |  bloque       STRING,
+         |  metrica      STRING,
+         |  universo     STRING,
+         |  numerador    STRING,
+         |  denominador  STRING,
+         |  pct          STRING,
+         |  ejemplos     STRING
          |)
          |PARTITIONED BY (initiative STRING, data_date_part STRING)
          |STORED AS PARQUET
@@ -153,7 +160,7 @@ object TableComparisonController {
   }
 
   // -------------------------------------------------------------------
-  // ESCRITURA: overwrite dinámico SOLO de la partición (initiative, data_date_part)
+  // Escritura: overwrite dinámico SOLO de la partición (initiative, data_date_part)
   // -------------------------------------------------------------------
   private def writeResultTable(
       spark: SparkSession,
@@ -168,12 +175,11 @@ object TableComparisonController {
       .withColumn("initiative", lit(initiativeName))
       .withColumn("data_date_part", lit(executionDate))
 
-    // Overwrite dinámico: sustituye sólo la partición escrita
     resultDf
       .repartition(col("initiative"), col("data_date_part"))
       .write
       .mode(SaveMode.Overwrite)   // con partitionOverwriteMode=dynamic
-      .insertInto(tableName)      // requiere que la tabla exista (ensureResultTables)
+      .insertInto(tableName)
 
     resultDf
   }
@@ -182,20 +188,12 @@ object TableComparisonController {
   // Helpers de partición
   // -------------------------------------------------------------------
 
-  /**
-   * Extrae executionDate en formato "YYYY-MM-DD" desde partitionSpec.
-   * - Prioriza data_date_part="YYYY-MM-DD".
-   * - Si no está, intenta data_timestamp_part="YYYYMMDD..." → YYYY-MM-DD.
-   * - Soporta separadores '/', comillas, y formato "[col=val]".
-   */
+  /** YYYY-MM-DD desde partitionSpec (data_date_part o data_timestamp_part). */
   private def extractExecutionDate(partitionSpecOpt: Option[String]): Option[String] = {
     partitionSpecOpt.flatMap { specRaw =>
       val spec = specRaw.trim
-
-      // 1) data_date_part="YYYY-MM-DD"
       val dateR = """(?i)data_date_part\s*=\s*"?([0-9]{4}-[0-9]{2}-[0-9]{2})"?""".r
       dateR.findFirstMatchIn(spec).map(_.group(1)).orElse {
-        // 2) data_timestamp_part="YYYYMMDD..." → YYYY-MM-DD
         val tsR = """(?i)data_timestamp_part\s*=\s*"?([0-9]{8,})"?""".r
         tsR.findFirstMatchIn(spec).map { m =>
           val yyyymmdd = m.group(1).take(8)
@@ -205,32 +203,20 @@ object TableComparisonController {
     }
   }
 
-  /**
-   * Parsea un partitionSpec con múltiples pares clave=valor y devuelve un Map.
-   * Acepta comillas y/o valores sin comillas; separadores como '/', espacios, etc.
-   * Ejemplos válidos:
-   *   data_date_part="2025-07-01"/geo="ES"/process_group="pseudo"
-   *   [partition_date=2025-07-25]
-   */
+  /** Parsea partitionSpec en Map(key -> value). */
   private def parseKeyValuePairs(specRaw: String): Map[String, String] = {
     val spec = specRaw.trim.stripPrefix("[").stripSuffix("]")
-
-    // Regex: key = "value" | value_sin_comillas (hasta '/', ']', espacio)
     val kv = """([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"([^"]*)"|([^/\]\s]+))""".r
-
     kv.findAllMatchIn(spec).map { m =>
       val key = m.group(1)
-      val v1  = m.group(2) // con comillas
-      val v2  = m.group(3) // sin comillas
+      val v1  = m.group(2)
+      val v2  = m.group(3)
       val value = if (v1 != null) v1 else v2
       key -> value
     }.toMap
   }
 
-  /**
-   * Carga una tabla y aplica TODOS los filtros presentes en partitionSpec
-   * (solo para columnas existentes en la tabla; el resto se ignora con aviso).
-   */
+  /** Carga tabla y filtra por todas las claves del partitionSpec que existan en la tabla. */
   private def loadDataWithPartition(
       spark: SparkSession,
       tableName: String,
@@ -263,3 +249,4 @@ object TableComparisonController {
     }
   }
 }
+

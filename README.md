@@ -83,16 +83,23 @@
 ##### **Y la Tabla con 30k registros debería verse así: 200 columns and 30000 rows**
 
 ```
-| Métrica                          | Ref   | New    | % Ref   | Status      | Ejemplos (IDs)               |
-|----------------------------------|-------|--------|---------|-------------|------------------------------|
-| Total registros                  | 30,000| 30,200 | 100.0%  | +200        | -                            |
-| Registros 1:1 exactos (Match)    | 21,121| 21,121 | 70.4%   | Match       | ID 1001, ID 2045, ID 12000   |
-| Registros 1:1 con diferencias    | 3,000 | 3,000  | 10.0%   | No Match    | ID 2222, ID 8765, ID 19999   |
-| Registros 1:0                    | 1,540 | -      | 5.1%    | Falta       | ID 8791, ID 13456, ID 19877  |
-| Registros 0:1                    | -     | 1,530  | -       | Sobra       | ID 30002, ID 30123, ID 30500 |
-| Duplicados exactos               | 320   | 305    | 1.1%    | Exactos     | ID 9204, ID 11200, ID 29876  |
-| Duplicados con variaciones (ref) | 208   | -      | 0.7%    | Diferencias | ID 4788, ID 19433, ID 28761  |
-| Duplicados con variaciones (new) | -     | 219    | -       | Diferencias | ID 4788, ID 19433, ID 28761  |
++---------+------------------------------+----------+-----------+-------------+--------+----------+
+| bloque  | metrica                      | universo | numerador | denominador |  pct   | ejemplos |
++---------+------------------------------+----------+-----------+-------------+--------+----------+
+| KPIS    | IDs Uniques                  | REF      | 11        | -           |   -    | -        |
+| KPIS    | IDs Uniques                  | NEW      | 11        | -           |   -    | -        |
+| KPIS    | Total REF                    | ROWS     | 11        | -           |   -    | -        |
+| KPIS    | Total NEW                    | ROWS     | 11        | -           |   -    | -        |
+| KPIS    | Total (NEW-REF)              | REF      | 0         | 11          |  0.0%  | -        |
+| KPIS    | Quality global               | ALL_IDS  | 11        | 11          | 100.0% | -        |
+| MATCH   | 1:1 (exact matches)          | REF      | 11        | 11          | 100.0% | -        |
+| NO MATCH| 1:1 (match not identical)    | REF      | 0         | 11          |  0.0%  | -        |
+| GAP     | 1:0 (only in reference)      | REF      | 0         | 11          |  0.0%  | -        |
+| GAP     | 0:1 (only in new)            | REF      | 0         | 11          |  0.0%  | -        |
+| DUPS    | Duplicates (both)            | REF      | 0         | 11          |  0.0%  | -        |
+| DUPS    | duplicates (ref)             | REF      | 0         | 11          |  0.0%  | -        |
+| DUPS    | Duplicates (new)             | NEW      | 0         | 11          |  0.0%  | -        |
++---------+------------------------------+----------+-----------+-------------+--------+----------+
 ```
 
 > **Notas sobre la interpretación de esta tabla:**
