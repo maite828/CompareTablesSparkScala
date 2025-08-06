@@ -1,3 +1,5 @@
+// src/main/scala/com/example/compare/Main.scala
+
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.types._
@@ -7,103 +9,79 @@ import org.apache.spark.sql.catalyst.TableIdentifier
 
 object Main {
   def main(args: Array[String]): Unit = {
-    // Configuración mínima para entorno local y metastore
-    System.setProperty("hadoop.home.dir", "/tmp/hadoop-dummy")
-    System.setProperty("spark.hadoop.validateOutputSpecs", "false")
-    System.setProperty("spark.sql.warehouse.dir", "/tmp/spark-warehouse")
-
-    // (Opcional) Desactivar hooks de Hadoop si molestan en local
-    try {
-      val manager = org.apache.hadoop.util.ShutdownHookManager.get()
-      val hooksField = manager.getClass.getDeclaredField("hooks")
-      hooksField.setAccessible(true)
-      hooksField.set(manager, new java.util.HashSet[Runnable]())
-    } catch {
-      case e: Exception =>
-        println(s"Advertencia: No se pudieron deshabilitar los hooks de Hadoop: ${e.getMessage}")
-    }
-
     val spark = SparkSession.builder()
       .appName("CompareTablesMain")
       .master("local[*]")
       .enableHiveSupport()
       .getOrCreate()
 
-    try {
-      import spark.implicits._
+    import spark.implicits._
 
-      // ==== NUEVOS PARÁMETROS DE PARTICIÓN ====
-      val dataDatePart = "2025-07-01"
-      val geoPart      = "ES"
-      // Ejemplo de partitionSpec con múltiples claves (el parser del Controller soporta orden libre)
-      val partitionSpec = Some(s"""data_date_part="$dataDatePart"/geo="$geoPart" """.trim)
+    val dataDatePart = "2025-07-01"
+    val geoPart      = "ES"
+    val partitionSpec = Some(s"""data_date_part="$dataDatePart"/geo="$geoPart"""")
+    val initiativeName = "Swift"                  // Nombre de la iniciativa
+    val tablePrefix    = "default.result_"        // Prefijo para tablas de resultados
 
-      val initiativeName = "Swift"                  // Nombre de la iniciativa
-      val tablePrefix    = "default.result_"        // Prefijo para tablas de resultados
 
-      // 1) Esquema de datos
-      val customSchema = StructType(Seq(
-        StructField("id", IntegerType, nullable = true),
-        StructField("country", StringType, nullable = true),
-        StructField("amount", DoubleType, nullable = true),
-        StructField("status", StringType, nullable = true)
-      ))
+    // 0) Generar datos de prueba y crear tablas Hive
+    val (refDF, newDF) = createTestDataFrames(spark, dataDatePart, geoPart)
+    createAndLoadSourceTables(spark, refDF, newDF)
 
-      // 2) Crear DataFrames de prueba (con columnas de partición nuevas)
-      val (refDF, newDF) = createTestDataFrames(spark, customSchema, dataDatePart, geoPart)
+    // 1) Crear y cargar tablas de origen (particionadas por data_date_part y geo)
+    createAndLoadSourceTables(spark, refDF, newDF)
 
-      // 3) Configuración para particiones dinámicas
-      spark.conf.set("hive.exec.dynamic.partition", "true")
-      spark.conf.set("hive.exec.dynamic.partition.mode", "nonstrict")
+    println(s"✅ Tablas ref_customers y new_customers (particiones: data_date_part, geo) creadas")
+    println(s"✅ Iniciativa: $initiativeName")
+    println(s"✅ PartitionSpec usado: ${partitionSpec.getOrElse("-")}")
+    println(s"✅ (data_date_part esperado en resultados): $dataDatePart")
 
-      // 4) Crear y cargar tablas de origen (particionadas por data_date_part y geo)
-      createAndLoadSourceTables(spark, refDF, newDF)
+    // 2) Nombres de tablas de salida
+    val diffTableName       = s"${tablePrefix}differences"
+    val summaryTableName    = s"${tablePrefix}summary"
+    val duplicatesTableName = s"${tablePrefix}duplicates"
 
-      println(s"✅ Tablas ref_customers y new_customers (particiones: data_date_part, geo) creadas")
-      println(s"✅ Iniciativa: $initiativeName")
-      println(s"✅ PartitionSpec usado: ${partitionSpec.getOrElse("-")}")
-      println(s"✅ (data_date_part esperado en resultados): $dataDatePart")
+    // 3) Eliminar y recrear tablas de resultados (si procede)
+    cleanAndPrepareTables(spark, diffTableName, summaryTableName, duplicatesTableName)
 
-      // 4.1) Nombres de tablas de salida
-      val diffTableName       = s"${tablePrefix}differences"
-      val summaryTableName    = s"${tablePrefix}summary"
-      val duplicatesTableName = s"${tablePrefix}duplicates"
+    // 4)Construir configuración
+    val config = CompareConfig(
+      spark            = spark,
+      refTable         = "default.ref_customers",
+      newTable         = "default.new_customers",
+      partitionSpec    = partitionSpec,
+      compositeKeyCols = Seq("id","country"),
+      ignoreCols       = Seq("last_update"),
+      initiativeName   = "Swift",
+      tablePrefix      = "default.result_",
+      checkDuplicates  = true,
+      includeEqualsInDiff = false
+    )
 
-      // 4.2) Eliminar y recrear tablas de resultados (si procede)
-      cleanAndPrepareTables(spark, diffTableName, summaryTableName, duplicatesTableName)
+    // 5) Ejecutar comparación
+    TableComparisonController.run(config)
 
-      // 5) Ejecutar comparación (el Controller extraerá data_date_part = dataDatePart desde partitionSpec)
-      TableComparisonController.run(
-        spark = spark,
-        refTable = "default.ref_customers",
-        newTable = "default.new_customers",
-        partitionSpec = partitionSpec,
-        compositeKeyCols = Seq("id", "country"),
-        ignoreCols = Seq("last_update"),
-        initiativeName = initiativeName,
-        tablePrefix = tablePrefix,
-        checkDuplicates = true,
-        includeEqualsInDiff = false
-      )
+    // 6) Mostrar resultados (data_date_part = dataDatePart)
+    showComparisonResults(spark, tablePrefix, initiativeName, dataDatePart)
 
-      // 6) Mostrar resultados (data_date_part = dataDatePart)
-      showComparisonResults(spark, tablePrefix, initiativeName, dataDatePart)
 
-    } finally {
-      spark.stop()
-    }
+    spark.stop()
   }
 
-
-
-  /** Crea los DataFrames de prueba e incluye las columnas de partición (data_date_part, geo). */
   private def createTestDataFrames(
       spark: SparkSession,
-      schema: StructType,
       dataDatePart: String,
       geoPart: String
-  ): (DataFrame, DataFrame) = {
-    val refData = Seq(
+  ) = {
+    // Esquema de prueba
+    val schema = StructType(Seq(
+      StructField("id", IntegerType, nullable = true),
+      StructField("country", StringType, nullable = true),
+      StructField("amount", DoubleType, nullable = true),
+      StructField("status", StringType, nullable = true)
+    ))
+
+    val ref= Seq(
       Row(1, "US", 100.50, "active"),
       Row(2, "ES", 75.20, "pending"),
       Row(3, "MX", 150.00, "active"),
@@ -119,7 +97,7 @@ object Main {
       Row(null, "GR", 60.00, "new"),
     )
 
-    val newData = Seq(
+    val nw = Seq(
       Row(1, "US", 100.49, "active"),
       Row(2, "ES", 75.20, "expired"),
       Row(4, "BR", 201.00, "new"),
@@ -138,59 +116,32 @@ object Main {
       Row(null, "GR", 61.00, "new")
     )
 
-    val refDF = spark.createDataFrame(spark.sparkContext.parallelize(refData), schema)
+    val refDF = spark.createDataFrame(spark.sparkContext.parallelize(ref), schema)
       .withColumn("data_date_part", lit(dataDatePart))
       .withColumn("geo", lit(geoPart))
-
-    val newDF = spark.createDataFrame(spark.sparkContext.parallelize(newData), schema)
+    val newDF = spark.createDataFrame(spark.sparkContext.parallelize(nw), schema)
       .withColumn("data_date_part", lit(dataDatePart))
       .withColumn("geo", lit(geoPart))
-
     (refDF, newDF)
   }
 
-
-
-  /** Crea las tablas de origen con particiones (data_date_part, geo) y escribe los datos. */
-  private def createAndLoadSourceTables(
-      spark: SparkSession,
-      refDF: DataFrame,
-      newDF: DataFrame
-  ): Unit = {
-    // Tabla de referencia
+  private def createAndLoadSourceTables(spark: SparkSession, refDF: org.apache.spark.sql.DataFrame, newDF: org.apache.spark.sql.DataFrame): Unit = {
     spark.sql("DROP TABLE IF EXISTS default.ref_customers")
     spark.sql(
-      """
-        |CREATE TABLE IF NOT EXISTS default.ref_customers (
-        |  id INT,
-        |  country STRING,
-        |  amount DOUBLE,
-        |  status STRING
-        |)
-        |PARTITIONED BY (data_date_part STRING, geo STRING)
-        |STORED AS PARQUET
-      """.stripMargin)
+      """CREATE TABLE default.ref_customers (
+        | id INT, country STRING, amount DOUBLE, status STRING
+        |) PARTITIONED BY (data_date_part STRING, geo STRING) STORED AS PARQUET""".stripMargin)
     refDF.write.mode("overwrite").insertInto("default.ref_customers")
 
-    // Tabla nueva
     spark.sql("DROP TABLE IF EXISTS default.new_customers")
     spark.sql(
-      """
-        |CREATE TABLE IF NOT EXISTS default.new_customers (
-        |  id INT,
-        |  country STRING,
-        |  amount DOUBLE,
-        |  status STRING
-        |)
-        |PARTITIONED BY (data_date_part STRING, geo STRING)
-        |STORED AS PARQUET
-      """.stripMargin)
+      """CREATE TABLE default.new_customers (
+        | id INT, country STRING, amount DOUBLE, status STRING
+        |) PARTITIONED BY (data_date_part STRING, geo STRING) STORED AS PARQUET""".stripMargin)
     newDF.write.mode("overwrite").insertInto("default.new_customers")
-
   }
 
-
-    /**
+      /**
    * Elimina tablas de salida y sus ubicaciones físicas (si existen).
    */
   private def cleanAndPrepareTables(
@@ -226,12 +177,7 @@ object Main {
     }
   }
 
-
-
-
-
-  
-  /** Muestra resultados filtrando por initiative y data_date_part (que será dataDatePart). */
+    /** Muestra resultados filtrando por initiative y data_date_part (que será dataDatePart). */
   private def showComparisonResults(
       spark: SparkSession,
       tablePrefix: String,
