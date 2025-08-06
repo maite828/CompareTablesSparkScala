@@ -13,10 +13,26 @@ ThisBuild / javaOptions ++= Seq(
 
 libraryDependencies ++= Seq(
   "org.apache.spark" %% "spark-core" % "3.5.0",
-  "org.apache.spark" %% "spark-sql" % "3.5.0",
+  "org.apache.spark" %% "spark-sql"  % "3.5.0",
   "org.apache.spark" %% "spark-hive" % "3.5.0",
   "com.typesafe.play" %% "play-json" % "2.9.4",
-  "org.apache.hadoop" % "hadoop-client" % "3.3.4"
+  "org.apache.hadoop"   %  "hadoop-client" % "3.3.4",
+  "com.norbitltd"     %% "spoiwo"        % "1.7.0"
+    exclude("org.scala-lang.modules", "scala-xml_2.12"),
+  "com.crealytics"    %% "spark-excel"   % "0.13.5"
 )
 
+// ------------------------------------------------------------------
+// Evict conflicts between scala-xml versions:
+// ------------------------------------------------------------------
+import sbt.Keys.evictionErrorLevel
+import sbt.librarymanagement.EvictionWarningOptions
+evictionErrorLevel := Level.Warn
+
+// Force scala-xml 2.1.0 (la que usa Spark 3.5.0)
+dependencyOverrides += "org.scala-lang.modules" %% "scala-xml" % "2.1.0"
+
+// ------------------------------------------------------------------
+// Main class for `sbt run`
+// ------------------------------------------------------------------
 Compile / run / mainClass := Some("Main")

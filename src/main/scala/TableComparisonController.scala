@@ -21,45 +21,53 @@ object TableComparisonController {
       throw new IllegalArgumentException("Falta data_date_part en partitionSpec")
     }
 
-    // Nombres de tablas de salida
+     // Nombres de tablas de salida
     val diffTable       = s"$tablePrefix" + "differences"
     val summaryTable    = s"$tablePrefix" + "summary"
     val duplicatesTable = s"$tablePrefix" + "duplicates"
 
-    // Crear tablas si es necesario
-    if (autoCreateTables) ensureResultTables(session, diffTable, summaryTable, duplicatesTable)
+    // 0) Crear tablas si es necesario
+    if (autoCreateTables) 
+      ensureResultTables(session, diffTable, summaryTable, duplicatesTable)
 
-    // Cargar ref y new aplicando filtros de partición
+    // 1) Cargar ref y new aplicando filtros de partición
     val refDf = loadWithPartition(session, refTable, partitionSpec)
     val newDf = loadWithPartition(session, newTable, partitionSpec)
 
-    // Columnas a comparar (excluir compositeKeyCols, ignoreCols, partición)
+    // 2) Columnas a comparar (excluir compositeKeyCols, ignoreCols, partición)
     val partitionKeys = partitionSpec.map(_.split("/").map(_.split("=")(0).trim).toSet).getOrElse(Set.empty)
     val colsToCompare = refDf.columns.toSeq
       .filterNot(ignoreCols.contains)
       .filterNot(partitionKeys.contains)
       .filterNot(compositeKeyCols.contains)
 
-    // 1) Diferencias
+    // 3) Diferencias
     val diffDf = DiffGenerator.generateDifferencesTable(
       session, refDf, newDf, compositeKeyCols, colsToCompare, includeEqualsInDiff, config
     )
     writeResult(session, diffTable, diffDf, Seq("id","column","value_ref","value_new","results"), initiativeName, executionDate)
 
-    // 2) Duplicados
+    // 4) Duplicados
     if (checkDuplicates) {
       val dups = DuplicateDetector.detectDuplicatesTable(session, refDf, newDf, compositeKeyCols, config)
       writeResult(session, duplicatesTable, dups, Seq("origin","id","exact_duplicates","duplicates_w_variations","occurrences","variations"), initiativeName, executionDate)
     }
 
-    // 3) Resumen
+    // 5) Resumen
     val dupDf = if (checkDuplicates) session.table(duplicatesTable) else session.emptyDataFrame
     val summaryDf = SummaryGenerator.generateSummaryTable(
       session, refDf, newDf, diffDf, dupDf, compositeKeyCols, refDf, newDf, config
     )
     writeResult(session, summaryTable, summaryDf, Seq("bloque","metrica","universo","numerador","denominador","pct","ejemplos"), initiativeName, executionDate)
+
+    // 6) Export opcional a Excel en S3
+    config.exportExcelPath.foreach { path =>
+      SummaryGenerator.exportToExcel(summaryDf, path)
+    }
+
   }
 
+  // -- Helpers para DDL y particiones (sin cambios) --
   private def ensureResultTables(
       spark: SparkSession,
       diffTable: String,

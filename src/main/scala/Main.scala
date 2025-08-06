@@ -46,16 +46,17 @@ object Main {
 
     // 4)Construir configuración
     val config = CompareConfig(
-      spark            = spark,
-      refTable         = "default.ref_customers",
-      newTable         = "default.new_customers",
-      partitionSpec    = partitionSpec,
-      compositeKeyCols = Seq("id","country"),
-      ignoreCols       = Seq("last_update"),
-      initiativeName   = "Swift",
-      tablePrefix      = "default.result_",
-      checkDuplicates  = true,
-      includeEqualsInDiff = false
+      spark           = spark,
+      refTable        = "default.ref_customers",
+      newTable        = "default.new_customers",
+      partitionSpec   = Some("""data_date_part="2025-07-01"/geo="ES""""),
+      compositeKeyCols= Seq("id","country"),
+      ignoreCols      = Seq("last_update"),
+      initiativeName  = "Swift",
+      tablePrefix     = "default.result_",
+      checkDuplicates = true,
+      includeEqualsInDiff = false,
+      autoCreateTables = true
     )
 
     // 5) Ejecutar comparación
@@ -92,9 +93,7 @@ object Main {
       Row(7, "PT", 300.50, "active"),
       Row(8, "BR", 100.50, "pending"),
       Row(9, "AN", 80.00, "new"),
-      Row(10, "GR", 60.00, "new"),
-      Row(null, "GR", 61.00, "new"),
-      Row(null, "GR", 60.00, "new"),
+      Row(10, "GR", 60.00, "new")
     )
 
     val nw = Seq(
@@ -109,11 +108,7 @@ object Main {
       Row(6, "DE", 400.10, "new"),
       Row(7, "",   300.50, "active"),
       Row(8, "BR", null,   "pending"),
-      Row(9, "AN", 80.00,  null),
-      Row(null, "GR", 60.00, "new"),
-      Row(null, "GR", 60.00, "new"),
-      Row(null, "GR", 60.00, "new"),
-      Row(null, "GR", 61.00, "new")
+      Row(9, "AN", 80.00,  null)
     )
 
     val refDF = spark.createDataFrame(spark.sparkContext.parallelize(ref), schema)
