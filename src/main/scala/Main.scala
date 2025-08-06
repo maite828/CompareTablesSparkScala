@@ -1,5 +1,6 @@
 // src/main/scala/com/example/compare/Main.scala
 
+import java.time.LocalDate
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.types._
@@ -49,7 +50,8 @@ object Main {
       spark           = spark,
       refTable        = "default.ref_customers",
       newTable        = "default.new_customers",
-      partitionSpec   = Some("""data_date_part="2025-07-01"/geo="ES""""),
+      //partitionSpec   = Some("""data_date_part="2025-07-01"/geo="ES""""),
+      partitionSpec   = None,
       compositeKeyCols= Seq("id","country"),
       ignoreCols      = Seq("last_update"),
       initiativeName  = "Swift",
@@ -192,7 +194,8 @@ object Main {
     val duplicatesTable = s"${tablePrefix}duplicates"
 
     def queryWithPartition(table: String) =
-      s"SELECT * FROM $table WHERE initiative = '$initiativeName' AND data_date_part = '$executionDate'"
+      // s"SELECT * FROM $table WHERE initiative = '$initiativeName' AND data_date_part = '$executionDate'"
+      s"SELECT * FROM $table WHERE initiative = '$initiativeName' AND data_date_part = '${LocalDate.now().toString}'"
 
     println("\n==== Tablas Hive disponibles ====")
     spark.sql("SHOW TABLES").show(false)
