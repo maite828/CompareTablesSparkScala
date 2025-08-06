@@ -27,8 +27,7 @@ case class CompareConfig(
   includeDupInQuality: Boolean = false,
   priorityCol: Option[String]   = None,
   aggOverrides: Map[String, AggType] = Map.empty,
-  //exportExcelPath: Option[String] = Some("file:/Users/maite828/CompareTablesSparkScala/output/summary.xlsx")
-  exportExcelPath: Option[String] = Some("./output/summary.xlsx")
+  exportExcelPath: Option[String] = None
     //exportExcelPath: Option[String] = Some("s3a://mi-bucket/resultados/summary.xlsx")
 
 
