@@ -49,7 +49,7 @@ object Main {
       initiativeName   = initiativeName,
       tablePrefix      = tablePrefix,
       checkDuplicates  = true,
-      includeEqualsInDiff = true,
+      includeEqualsInDiff = false,
       autoCreateTables = true,
       exportExcelPath  = Some("./output/summary.xlsx")
     )
@@ -78,8 +78,8 @@ object Main {
 
     // Datos de referencia (BigDecimal en lugar de Double)
     val ref = Seq(
-      Row(1: java.lang.Integer, "US", new BigDecimal("100.50"), "active"),
-      Row(2: java.lang.Integer, "ES ", new BigDecimal("1.000000000000000001"), "pending"),
+      Row(1: java.lang.Integer, "US", new BigDecimal("100.40"), "active"),
+      Row(2: java.lang.Integer, "ES ", new BigDecimal("1.000000000000000001"), "expired"),
       Row(3: java.lang.Integer, "MX", new BigDecimal("150.00"), "active"),
       Row(4: java.lang.Integer, "FR", new BigDecimal("200.00"), "new"),
       Row(4: java.lang.Integer, "BR", new BigDecimal("201.00"), "new"),
@@ -94,8 +94,8 @@ object Main {
     )
 
     val nw = Seq(
-      Row(1: java.lang.Integer, "US", new BigDecimal("100.49"), "active"),
-      Row(2: java.lang.Integer, "ES", new BigDecimal("1.00000000000000000"), "expired"),
+      Row(1: java.lang.Integer, "US", new BigDecimal("100.40"), "active"),
+      Row(2: java.lang.Integer, "ES", new BigDecimal("1.000000000000000001"), "expired"),
       Row(4: java.lang.Integer, "BR", new BigDecimal("201.00"), "new"),
       Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"),
       Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"),

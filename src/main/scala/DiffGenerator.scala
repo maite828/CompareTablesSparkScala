@@ -1,6 +1,5 @@
 // src/main/scala/com/example/compare/DiffGenerator.scala
 
-
 import org.apache.spark.sql.{DataFrame, SparkSession, Column}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
@@ -13,7 +12,6 @@ object DiffGenerator {
   /** Formatea valores a cadena, respetando la escala de DecimalType tal cual */
   private def formatValue(c: Column, dt: DataType): Column = dt match {
     case _: DecimalType =>
-      // simplemente casteamos a string, Spark preserva la escala del Decimal
       val s = c.cast(StringType)
       when(s.isNull || trim(s) === "", lit("-")).otherwise(s)
     case _ =>
@@ -59,11 +57,11 @@ object DiffGenerator {
     // 2) Filtrar columnas constantes
     val baseCols   = compareColsIn.filterNot(compositeKeyCols.contains).distinct
     val commonCols = nRef.columns.toSet.intersect(nNew.columns.toSet)
-    val consts     = commonCols.filter(c =>
+    val consts     = commonCols.filter { c =>
       baseCols.contains(c) &&
       isConstantColumn(nRef, c) &&
       isConstantColumn(nNew, c)
-    )
+    }
     if (consts.nonEmpty)
       println(s"[INFO] Excluyendo columnas constantes: ${consts.mkString(",")}")
     val compareCols = baseCols.filterNot(consts.contains)
@@ -99,18 +97,20 @@ object DiffGenerator {
       }
     }
 
-    val refAgg = refBase.groupBy(compositeKeyCols.map(col): _*)
-                        .agg(aggs.head, aggs.tail: _*)
-                        .withColumn("_present", lit(1))
-    val newAgg = newBase.groupBy(compositeKeyCols.map(col): _*)
-                        .agg(aggs.head, aggs.tail: _*)
-                        .withColumn("_present", lit(1))
+    val refAgg = refBase
+      .groupBy(compositeKeyCols.map(col): _*)
+      .agg(aggs.head, aggs.tail: _*)
+      .withColumn("_present", lit(1))
+    val newAgg = newBase
+      .groupBy(compositeKeyCols.map(col): _*)
+      .agg(aggs.head, aggs.tail: _*)
+      .withColumn("_present", lit(1))
 
-    // 5) Mapear nombre de columna → DataType post-agg
+    // 5) Obtener tipos posteriores a la agregación
     val dtMap: Map[String, DataType] =
       refAgg.schema.filter(f => compareCols.contains(f.name)).map(f => f.name -> f.dataType).toMap
 
-    // 6) Join fullouter con política nullKeyMatches
+    // 6) Full outer join con política de nulos
     val joinCond = compositeKeyCols.map { k =>
       val l = col(s"ref.$k"); val r = col(s"new.$k")
       if (config.nullKeyMatches) l <=> r else (l.isNotNull && r.isNotNull && l === r)
@@ -118,13 +118,11 @@ object DiffGenerator {
 
     val joined = refAgg.alias("ref")
       .join(newAgg.alias("new"), joinCond, "fullouter")
-      .withColumn("exists_ref", col("ref._present").isNotNull)
-      .withColumn("exists_new", col("new._present").isNotNull)
+      .withColumn("exists_ref",  col("ref._present").isNotNull)
+      .withColumn("exists_new",  col("new._present").isNotNull)
 
-    // 7) Explode diferencias usando el DataType correcto en formatValue
-    val diffs = compareCols.map { c =>
-      buildDiffStruct(compositeKeyCols, c, dtMap(c))
-    }
+    // 7) Explode diferencias con formateo fiel
+    val diffs = compareCols.map(c => buildDiffStruct(compositeKeyCols, c, dtMap(c)))
     val exploded = joined
       .select(array(diffs: _*).as("diffs"))
       .withColumn("diff", explode($"diffs"))
