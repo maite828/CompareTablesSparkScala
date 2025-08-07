@@ -41,3 +41,5 @@ class SummaryGeneratorSpec extends AnyFlatSpec with Matchers with SparkSessionTe
       .select("numerador").as[String].collect().head
   }
 }
+
+
