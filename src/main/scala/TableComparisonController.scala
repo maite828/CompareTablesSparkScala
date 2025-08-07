@@ -105,7 +105,7 @@ object TableComparisonController {
         session, refDf, newDf, compositeKeyCols, config
       )
       writeResult(session, s"${tablePrefix}duplicates", dupDf,
-        Seq("origin","id","exact_duplicates","duplicates_w_variations","occurrences","variations"),
+        Seq("origin","id","exact_duplicates","dups_w_variations","occurrences","variations"),
         initiativeName, executionDate
       )
     }
@@ -177,7 +177,7 @@ object TableComparisonController {
          |  origin STRING,
          |  id STRING,
          |  exact_duplicates STRING,
-         |  duplicates_w_variations STRING,
+         |  dups_w_variations STRING,
          |  occurrences STRING,
          |  variations STRING
          |)

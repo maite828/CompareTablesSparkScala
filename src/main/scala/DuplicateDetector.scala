@@ -18,7 +18,7 @@
  *   7. Maps results to `DuplicateOut` case class for structured output.
  *
  * Output:
- *   - DataFrame with columns: origin, id (composite key), exact_duplicates, duplicates_w_variations,
+ *   - DataFrame with columns: origin, id (composite key), exact_duplicates, dups_w_variations,
  *     occurrences, and variations (non-key columns with differing values).
  */
 // src/main/scala/com/example/compare/DuplicateDetector.scala
@@ -36,7 +36,7 @@ case class DuplicateOut(
   origin: String,                 // "ref" | "new"
   id: String,                     // compuesto o "NULL"
   exact_duplicates: String,       // total - countDistinct(hash)
-  duplicates_w_variations: String,// max(countDistinct(hash) - 1, 0)
+  dups_w_variations: String,// max(countDistinct(hash) - 1, 0)
   occurrences: String,            // total del grupo
   variations: String              // campo: [v1,v2] | ...
 )

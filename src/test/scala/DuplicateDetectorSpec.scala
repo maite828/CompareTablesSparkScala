@@ -48,7 +48,7 @@ class DuplicateDetectorSpec extends AnyFlatSpec with Matchers with SparkSessionT
     d.getAs[String]("id") shouldBe "1"
     d.getAs[String]("occurrences") shouldBe "2"
     d.getAs[String]("exact_duplicates") shouldBe "1"
-    d.getAs[String]("duplicates_w_variations") shouldBe "0"
+    d.getAs[String]("dups_w_variations") shouldBe "0"
     d.getAs[String]("variations") shouldBe "-"
   }
 }
