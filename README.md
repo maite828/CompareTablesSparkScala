@@ -1,5 +1,8 @@
 ## **Sistema de Comparación( 2 tablas ) - Ejemplo Completo**
 
+# CompareTablesProject
+![CI](https://github.com/maite828/CompareTablesSparkScala/actions/workflows/ci.yml/badge.svg)
+
 ---
 
 ### **1. Configuración del Sistema**
