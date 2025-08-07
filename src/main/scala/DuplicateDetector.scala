@@ -1,3 +1,26 @@
+/**
+ * Object containing logic to detect duplicate rows in two DataFrames (reference and new),
+ * based on a composite key and optional priority column. It computes both exact duplicates
+ * (identical rows) and duplicates with variations (same key, differing non-key columns).
+ *
+ * Main method:
+ *   - `detectDuplicatesTable`: Given Spark session, reference DataFrame, new DataFrame,
+ *     composite key columns, and comparison config, returns a DataFrame of detected duplicates.
+ *
+ * Detection steps:
+ *   1. Combines both DataFrames, tagging each row with its origin ("ref" or "new").
+ *   2. If a priority column is defined, keeps only the highest-priority row per key group.
+ *   3. Identifies non-key columns for variation analysis.
+ *   4. Computes a hash for each row (excluding origin) to identify exact duplicates.
+ *   5. Aggregates by origin and composite key, counting occurrences, exact duplicates,
+ *      and duplicates with variations. Also collects sets of values for non-key columns.
+ *   6. Constructs output rows with origin, composite key, duplicate counts, and variation details.
+ *   7. Maps results to `DuplicateOut` case class for structured output.
+ *
+ * Output:
+ *   - DataFrame with columns: origin, id (composite key), exact_duplicates, duplicates_w_variations,
+ *     occurrences, and variations (non-key columns with differing values).
+ */
 // src/main/scala/com/example/compare/DuplicateDetector.scala
 
 import org.apache.spark.sql.{DataFrame, SparkSession, Encoders, Column}

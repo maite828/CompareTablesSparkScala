@@ -1,3 +1,27 @@
+/**
+ * SummaryGenerator is an object that provides utilities to generate a summary table comparing two DataFrames,
+ * typically used for data quality and reconciliation between a reference and a new dataset.
+ *
+ * Main Features:
+ * - Calculates key metrics such as unique IDs, total rows, differences in row counts, and global quality.
+ * - Identifies exact matches, variations, gaps (IDs only in one dataset), and duplicates across datasets.
+ * - Provides examples of IDs for each metric for easier inspection.
+ * - Supports exporting the summary table to Excel format.
+ *
+ * Key Methods:
+ * - generateSummaryTable: Builds a summary DataFrame with metrics and sample IDs, given reference, new, diff, and duplicate DataFrames.
+ * - exportToExcel: Exports the summary DataFrame to an Excel file using the crealytics spark-excel library.
+ *
+ * Helper Functions:
+ * - pctStr: Formats percentage values with one decimal, returns "-" if denominator is zero.
+ * - nz: Normalizes empty strings to NULL for consistent ID construction.
+ * - idsToStr: Converts a DataFrame of IDs to a comma-separated string of examples.
+ *
+ * Usage:
+ * 1. Prepare the required DataFrames (refDf, newDf, diffDf, dupDf, etc.) and configuration.
+ * 2. Call generateSummaryTable to obtain the summary DataFrame.
+ * 3. Optionally, export the summary to Excel using exportToExcel.
+ */
 
 import org.apache.spark.sql.{DataFrame, SparkSession, SaveMode}
 import org.apache.spark.sql.functions._
@@ -16,11 +40,11 @@ case class SummaryRow(
 object SummaryGenerator {
 
   /** % con un decimal; "-" cuando el denominador es 0 */
-  private def pctStr(num: Long, den: Long): String =
+   def pctStr(num: Long, den: Long): String =
     if (den == 0) "-" else f"${num.toDouble / den * 100}%.1f%%"
 
   /** normaliza strings vacíos a NULL */
-  private def nz(c: org.apache.spark.sql.Column) =
+   def nz(c: org.apache.spark.sql.Column) =
     when(trim(c.cast("string")) === "", lit(null)).otherwise(c)
 
   def generateSummaryTable(

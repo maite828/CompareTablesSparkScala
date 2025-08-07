@@ -15,6 +15,7 @@ libraryDependencies ++= Seq(
   "org.apache.spark" %% "spark-core" % "3.5.0",
   "org.apache.spark" %% "spark-sql"  % "3.5.0",
   "org.apache.spark" %% "spark-hive" % "3.5.0",
+  "org.scalatest" %% "scalatest" % "3.2.15" % Test,
   "com.typesafe.play" %% "play-json" % "2.9.4",
   "org.apache.hadoop"   %  "hadoop-client" % "3.3.4",
   "com.norbitltd"     %% "spoiwo"        % "1.7.0"

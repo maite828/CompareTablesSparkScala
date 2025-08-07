@@ -1,3 +1,26 @@
+/**
+ * DiffGenerator provides utilities to compare two Spark DataFrames and generate a detailed differences table.
+ *
+ * Main features:
+ * - Normalizes empty key values to NULL for robust joins.
+ * - Excludes constant columns from comparison to optimize performance.
+ * - Supports deterministic pre-ordering using a priority column.
+ * - Aggregates rows per key with customizable aggregation strategies (max, min, first non-null, etc.).
+ * - Performs a full outer join on composite keys, with configurable NULL key matching.
+ * - Formats values faithfully, respecting DecimalType scale and other data types.
+ * - Canonicalizes values for deterministic comparison, including complex types (arrays, maps, structs).
+ * - Explodes differences per column, indicating presence in reference/new, matches, and mismatches.
+ *
+ * Key methods:
+ * - generateDifferencesTable: Main entry point to produce a DataFrame of differences between two tables.
+ * - formatValue: Formats a column value as a string, handling nulls and empty values.
+ * - canonicalize: Converts a column value to a canonical form for reliable comparison.
+ * - buildDiffStruct: Constructs a struct representing the difference for a single column/key combination.
+ *
+ * Usage:
+ * Call `generateDifferencesTable` with SparkSession, reference/new DataFrames, key columns, columns to compare,
+ * whether to include matches, and a CompareConfig for custom behavior.
+ */
 // src/main/scala/com/example/compare/DiffGenerator.scala
 
 import org.apache.spark.sql.{DataFrame, SparkSession, Column}
@@ -10,7 +33,7 @@ import AggType._
 object DiffGenerator {
 
   /** Formatea valores a cadena, respetando la escala de DecimalType tal cual */
-  private def formatValue(c: Column, dt: DataType): Column = dt match {
+   def formatValue(c: Column, dt: DataType): Column = dt match {
     case _: DecimalType =>
       val s = c.cast(StringType)
       when(s.isNull || trim(s) === "", lit("-")).otherwise(s)
@@ -20,7 +43,7 @@ object DiffGenerator {
   }
 
   /** Representación canónica determinista para comparaciones */
-  private def canonicalize(c: Column, dt: DataType): Column = dt match {
+   def canonicalize(c: Column, dt: DataType): Column = dt match {
     case _: NumericType   => c
     case _: BooleanType   => c
     case _: DateType      => c
@@ -35,7 +58,7 @@ object DiffGenerator {
     case _             => to_json(c)
   }
 
-  private def isConstantColumn(df: DataFrame, colName: String): Boolean =
+   def isConstantColumn(df: DataFrame, colName: String): Boolean =
     df.select(col(colName)).distinct().limit(2).count() <= 1
 
   def generateDifferencesTable(
@@ -132,7 +155,7 @@ object DiffGenerator {
   }
 
   /** Ahora buildDiffStruct recibe también el DataType para formatear correctamente */
-  private def buildDiffStruct(
+   def buildDiffStruct(
       keyCols: Seq[String],
       colName: String,
       dt: DataType

@@ -1,3 +1,25 @@
+/**
+ * TableComparisonController is the main orchestrator for comparing two tables in Spark.
+ * It handles loading, filtering, comparing, and summarizing differences and duplicates between tables.
+ *
+ * Main workflow:
+ *  1. Configures Spark performance settings.
+ *  2. Optionally creates output tables for differences, summary, and duplicates.
+ *  3. Extracts execution date from partition specification or uses current date.
+ *  4. Loads reference and new tables, prunes columns, and persists DataFrames.
+ *  5. Generates and writes differences between tables.
+ *  6. Optionally detects and writes duplicate records.
+ *  7. Generates and writes summary metrics.
+ *  8. Optionally exports summary to Excel.
+ *  9. Releases cached DataFrames.
+ *
+ * Helper methods:
+ *  - ensureResultTables: Creates output tables if they do not exist.
+ *  - loadWithPartition: Loads a table, optionally filtering by partition specification.
+ *  - writeResult: Writes results to a table, repartitioned by initiative and execution date.
+ *
+ * @param config CompareConfig containing Spark session, table names, columns, partition specs, and options.
+ */
 // src/main/scala/com/example/compare/TableComparisonController.scala
 
 import java.time.LocalDate
@@ -117,7 +139,7 @@ object TableComparisonController {
   // -------------------------------------------------------------------
 
   /** Crea las tablas de resultados si no existen */
-  private def ensureResultTables(
+   def ensureResultTables(
       spark: SparkSession,
       diffTable: String,
       summaryTable: String,
@@ -165,7 +187,7 @@ object TableComparisonController {
   }
 
   /** Carga toda la tabla o filtra por cada clave=valor de partitionSpec */
-  private def loadWithPartition(
+   def loadWithPartition(
       spark: SparkSession,
       tableName: String,
       partitionSpec: Option[String]
@@ -185,7 +207,7 @@ object TableComparisonController {
   }
 
   /** Inserta el resultado siempre reparticionado por initiative + data_date_part */
-  private def writeResult(
+   def writeResult(
       spark: SparkSession,
       tableName: String,
       df: DataFrame,

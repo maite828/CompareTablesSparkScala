@@ -1,3 +1,24 @@
+/**
+ * Main object for comparing two Spark tables with partitioning and decimal support.
+ *
+ * This program:
+ *  - Generates test DataFrames with `DecimalType` columns for high-precision numeric comparison.
+ *  - Creates and loads Hive tables (`ref_customers` and `new_customers`) partitioned by `date` and `geo`.
+ *  - Cleans up and prepares result tables for differences, summary, and duplicates.
+ *  - Configures comparison parameters via `CompareConfig`, including composite keys, ignored columns, and output options.
+ *  - Runs the table comparison logic using `TableComparisonController`.
+ *  - Displays results from the comparison, including differences, summary, and duplicates.
+ *
+ * Key Features:
+ *  - Uses `DecimalType(38,18)` for precise numeric comparisons.
+ *  - Handles partitioned tables and custom partition specs.
+ *  - Supports duplicate detection and exclusion of equal rows from differences.
+ *  - Optionally exports summary results to Excel.
+ *
+ * Usage:
+ *  - Designed for local Spark execution with Hive support enabled.
+ *  - Intended for testing and validating table comparison logic in Spark environments.
+ */
 // src/main/scala/com/example/compare/Main.scala
 
 import java.math.BigDecimal

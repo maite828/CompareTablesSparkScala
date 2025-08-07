@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Clona el repo
+      - uses: actions/checkout@v4
+
+      # 2. Cachea ~/.ivy2 y ~/.sbt para acelerar builds sucesivos
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ivy2/cache
+            ~/.sbt
+          key: ${{ runner.os }}-ivy2-${{ hashFiles('**/build.sbt') }}
+          restore-keys: ${{ runner.os }}-ivy2-
+
+      # 3. Instala Java 11 y SBT a través de coursier
+      - uses: coursier/setup-action@v1
+        with:
+          jvm: temurin:11
+
+      # 4. Ejecuta los tests con tu versión de Scala
+      - name: Run tests
+        run: sbt ++2.12.18 clean test
+
+      # 5. (Opcional) Genera informe de cobertura si añades scoverage
+      # - name: Coverage
+      #   run: sbt ++2.12.18 coverage test coverageReport
