@@ -100,16 +100,16 @@ object Main {
     // Datos de referencia (BigDecimal en lugar de Double)
     val ref = Seq(
       Row(1: java.lang.Integer, "US", new BigDecimal("100.40"), "active"),
+      Row(1: java.lang.Integer, "US", new BigDecimal("100.40"), "active"),
       Row(2: java.lang.Integer, "ES ", new BigDecimal("1.000000000000000001"), "expired"),
-      Row(3: java.lang.Integer, "MX", new BigDecimal("150.00"), "active"),
-      Row(4: java.lang.Integer, "FR", new BigDecimal("200.00"), "new"),
+      Row(3: java.lang.Integer, "MX", new BigDecimal("150.00"), "active"),// No en new
+      Row(4: java.lang.Integer, "FR", new BigDecimal("200.00"), "new"),   // ---> Repeated
       Row(4: java.lang.Integer, "BR", new BigDecimal("201.00"), "new"),   // ---> Repeated with different country
-      Row(5: java.lang.Integer, "FR", new BigDecimal("300.00"), "active"),
-      Row(5: java.lang.Integer, "FR", new BigDecimal("300.50"), "active"),// ---> Repeated with different amount
+      Row(5: java.lang.Integer, "FR", new BigDecimal("300.00"), "active"),// ---> Repeated with different amount y  No en new
+      Row(5: java.lang.Integer, "FR", new BigDecimal("300.50"), "active"),// ---> Repeated with different amount y  No en new
       Row(7: java.lang.Integer, "PT", new BigDecimal("300.50"), "active"),
       Row(8: java.lang.Integer, "BR", new BigDecimal("100.50"), "pending"),
-      Row(9: java.lang.Integer, "AN", new BigDecimal("80.00"), "new"),
-      Row(10: java.lang.Integer, "GR", new BigDecimal("60.00"), "new"),
+      Row(10: java.lang.Integer, "GR", new BigDecimal("60.00"), "new"), // No en new
       Row(null                 , "GR", new BigDecimal("61.00"), "new"),
       Row(null                 , "GR", new BigDecimal("60.00"), "new")
     )
@@ -121,12 +121,11 @@ object Main {
       Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"), // ---> Identical Repeated
       Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"), // ---> Identical Repeated
       Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"), // ---> Identical Repeated
-      Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"),
-      Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"),
-      Row(6: java.lang.Integer, "DE", new BigDecimal("400.10"), "new"), // ---> Repeated with different amount
+      Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"), // ---> Repeated and No en ref
+      Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"), // ---> Repeated and No en ref
+      Row(6: java.lang.Integer, "DE", new BigDecimal("400.10"), "new"), // ---> Repeated and No en ref with different amount
       Row(7: java.lang.Integer, "",   new BigDecimal("300.50"), "active"),
       Row(8: java.lang.Integer, "BR", null                    , "pending"),
-      Row(9: java.lang.Integer, "AN", new BigDecimal("80.00"),  null),
       Row(null                , "GR", new BigDecimal("60.00"), "new"),
       Row(null                , "GR", new BigDecimal("60.00"), "new"), // ---> Identical Repeated
       Row(null                , "GR", new BigDecimal("60.00"), "new"), // ---> Identical Repeated

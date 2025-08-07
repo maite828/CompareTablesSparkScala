@@ -91,13 +91,54 @@ val cfg = CompareConfig(
 
 ### 3.1 Tabla `result_differences`
 
-| results                     | Significado                                                      |
-| --------------------------- | ---------------------------------------------------------------- |
-| `MATCH`                     | Valor idéntico en REF y NEW (solo si `includeEqualsInDiff=true`) |
-| `NO_MATCH`                  | id presente en ambos, valor diferente                            |
-| `ONLY_IN_REF / ONLY_IN_NEW` | id ausente en la tabla opuesta                                   |
+| results                     | Significado                                                               |
+| --------------------------- | ------------------------------------------------------------------------- |
+| `MATCH`                     | Valor idéntico en REF y NEW *(visible en modo extendido)*.                |
+| `NO_MATCH`                  | La clave existe en ambos lados, pero el **valor representativo** difiere. |
+| `ONLY_IN_REF / ONLY_IN_NEW` | La clave sólo existe en uno de los lados.                                 |
 
-Ejemplo (extracto):
+**Cómo se calcula (visión funcional)**
+
+1. **Normalización de claves vacías**\
+   Valores vacíos en las columnas clave se tratan como **NULL**, de modo que todas las filas sin clave se agrupan bajo el id `"NULL"`. Esto afecta a la intersección y a los denominadores del resumen.
+
+2. **Columnas constantes se omiten**\
+   Si una columna tiene el **mismo valor en todo el dataset** (tanto en REF como en NEW), no se incluye en `result_differences`. Así evitas ruido en tablas anchas.
+
+3. **Fila de mayor prioridad (opcional)**\
+   Si defines una columna de prioridad, para cada clave se conserva **una única fila** (la de mayor prioridad) **antes** de comparar. Esto estabiliza el resultado cuando hay duplicados operativos. Los duplicados siguen viéndose en `result_duplicates`.
+
+4. **Valor representativo por clave**\
+   Cuando una clave aparece varias veces, se elige **un valor por columna** para compararlo entre REF y NEW. Reglas por defecto:
+
+- **Numéricos/fechas/booleanos** → se toma el **máximo** (robusto ante ruido bajo).
+- **Textos** → se usa el **orden natural** para elegir un valor estable.
+- **Estructuras/arrays/mapas** → se comparan en formato JSON; en **mapas** el orden de pares no afecta, en **arrays** **sí** importa el orden.
+
+> Esto explica por qué, en claves con varias filas (p. ej. id `NULL` con importes 60/61), el diff puede salir `MATCH`: si en ambos lados el valor representativo seleccionado coincide.
+
+5. **Política de nulos en la comparación de claves**\
+   Dos claves **NULL** pueden considerarse iguales (comportamiento por defecto). Si deseas tratarlas siempre como diferentes, cambia la política de emparejamiento de claves nulas.
+
+6. **Formateo fiel de valores**
+
+- Los decimales **conservan la escala**: `1.2000` se muestra como `1.2000`.
+- Los nulos/vacíos en valores (no claves) se muestran como `-` para facilitar lectura.
+
+**Casos borde típicos con el dataset de ejemplo**
+
+- `id=2`, `country`: `"ES␠"` vs `"ES"` → `NO_MATCH` por espacio en blanco.
+- `id=3` presente sólo en REF → varias filas `ONLY_IN_REF` (una por columna comparada).
+- `id=6` presente sólo en NEW → varias filas `ONLY_IN_NEW`.
+- `id=NULL` (claves vacías): al agregar por clave, ambos lados comparten un valor representativo común para `amount` → puede aparecer como `MATCH` en modo extendido; las **variaciones internas** se ven en `result_duplicates`.
+
+**Cómo leerla eficazmente**
+
+1. Para **saber dónde cambia** algo, filtra por `results != 'MATCH'` y ordena por `id, column`.
+2. Si ves muchas `ONLY_IN_*`, comprueba si es por **particiones** mal filtradas o por **claves vacías** concentradas en `id="NULL"`.
+3. Si una clave sale `MATCH` pero sospechas valores distintos internamente, abre `result_duplicates` para ver el **rango de variaciones**.
+
+Ejemplo (extracto rápido):
 
 ```text
 id=2 column=country ➜ NO_MATCH   ("ES␠" vs "ES")
@@ -107,29 +148,28 @@ id=6 column=amount  ➜ ONLY_IN_NEW (400.10 sólo en NEW)
 
 ### 3.2 Tabla `result_duplicates`
 
-`origin` indica dónde se detecta el grupo duplicado:
+Mide la **calidad de unicidad** de cada identificador en ambos universos.
 
-| Valor  | Significado                                        |
-| ------ | -------------------------------------------------- |
-| `ref`  | Clave duplicada **solo** en tabla REF.             |
-| `new`  | Clave duplicada **solo** en tabla NEW.             |
-| `both` | Hay al menos una fila con esa clave en cada tabla. |
+**Cómo se genera** (versión ejecutiva)
 
-| Columna     | Qué representa                                                               |      |
-| ----------- | ---------------------------------------------------------------------------- | ---- |
-| ``          | Clave compuesta (NULL si todas sus columnas son nulas).                      |      |
-| ``          | `occurrences - countDistinct(hash)` → filas 100 % iguales entre sí.          |      |
-| ``          | `max(countDistinct(hash) - 1,0)` → mismo id pero al menos un valor distinto. |      |
-| ``          | Total de filas con ese id y origen.                                          |      |
-| ``          | Columnas con >1 valor: \`col: [v1,v2]                                        | …\`. |
-| ``** / **`` | Particiones de salida añadidas por el controlador.                           |      |
+1. Para cada fila se crea una «huella» digital que resume todas sus columnas.
+2. Se agrupa por *origen* (REF o NEW) y *id compuesto*.
+3. Para cada grupo se calculan:
+   - **Total de filas** (`occurrences`).
+   - **Filas repetidas al 100 %** (`exact_duplicates`).\
+     ⇒ mismo id + huella idéntica.
+   - **Filas con al menos una diferencia** (`duplicates_w_variations`).
+   - **Variaciones detectadas**: qué columnas cambian y sus valores.
+4. Si un mismo id presenta duplicados en los dos lados verás dos registros (uno `ref` y otro `new`).
 
-> **Cómo decide el algoritmo**
->
-> 1. Genera un *hash de fila* (`sha2`) con todas las columnas salvo `_src`.
-> 2. Agrupa por `origin + id`.
-> 3. Calcula contadores y set de valores.
-> 4. Si se define `priorityCol`, primero se escoge la fila ganadora (máx. prioridad) y se eliminan las demás antes de contar.
+| origin | Interpretación rápida                  |
+| ------ | -------------------------------------- |
+| `ref`  | Duplicados sólo en la tabla histórica. |
+| `new`  | Duplicados sólo en la tabla candidata. |
+
+> Para localizar rápidamente qué causa el problema:\
+> *`exact_duplicates`*\* alto\* ⇒ copias exactas.\
+> *`duplicates_w_variations`*\* alto\* ⇒ la clave se reescribe con valores distintos.
 
 #### Ejemplo real (extracto)
 
@@ -210,4 +250,5 @@ Actívalo con `includeEqualsInDiff=true` y consulta `summary.xlsx`.
 ---
 
 © 2025 · Compare‑tables Spark 3.5.0 · MIT
+
 
