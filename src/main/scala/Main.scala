@@ -20,7 +20,7 @@ object Main {
 
     val dataDatePart    = "2025-07-01"
     val geoPart         = "ES"
-    val partitionSpec   = Some(s"""data_date_part="$dataDatePart"/geo="$geoPart"""")
+    val partitionSpec   = Some(s"""date="$dataDatePart"/geo="$geoPart"""")
     val initiativeName  = "Swift"
     val tablePrefix     = "default.result_"
 
@@ -28,7 +28,7 @@ object Main {
     val (refDF, newDF) = createTestDataFrames(spark, dataDatePart, geoPart)
     createAndLoadSourceTables(spark, refDF, newDF)
 
-    println(s"✅ Tablas ref_customers y new_customers creadas (particiones: data_date_part, geo)")
+    println(s"✅ Tablas ref_customers y new_customers creadas (particiones: date, geo)")
     println(s"✅ Iniciativa: $initiativeName")
     println(s"✅ PartitionSpec: ${partitionSpec.getOrElse("-")}")
 
@@ -115,13 +115,13 @@ object Main {
     val refDF = spark.createDataFrame(
       spark.sparkContext.parallelize(ref.asInstanceOf[Seq[Row]]),
       schema
-    ).withColumn("data_date_part", lit(dataDatePart))
+    ).withColumn("date", lit(dataDatePart))
      .withColumn("geo",            lit(geoPart))
 
     val newDF = spark.createDataFrame(
       spark.sparkContext.parallelize(nw.asInstanceOf[Seq[Row]]),
       schema
-    ).withColumn("data_date_part", lit(dataDatePart))
+    ).withColumn("date", lit(dataDatePart))
      .withColumn("geo",            lit(geoPart))
 
     (refDF, newDF)
@@ -142,7 +142,7 @@ object Main {
         |  amount DECIMAL(38,18),
         |  status STRING
         |)
-        |PARTITIONED BY (data_date_part STRING, geo STRING)
+        |PARTITIONED BY (date STRING, geo STRING)
         |STORED AS PARQUET
       """.stripMargin)
     refDF.write.mode("overwrite").insertInto("default.ref_customers")
@@ -157,7 +157,7 @@ object Main {
         |  amount DECIMAL(38,18),
         |  status STRING
         |)
-        |PARTITIONED BY (data_date_part STRING, geo STRING)
+        |PARTITIONED BY (date STRING, geo STRING)
         |STORED AS PARQUET
       """.stripMargin)
     newDF.write.mode("overwrite").insertInto("default.new_customers")
@@ -198,19 +198,24 @@ object Main {
       initiative: String,
       datePart: String
   ): Unit = {
-    def q(tbl: String) =
-      s"SELECT * FROM $tbl WHERE initiative = '$initiative' AND data_date_part = '$datePart'"
+    def q(table: String) =
+      s"""
+         |SELECT *
+         |FROM $table
+         |WHERE initiative = '$initiative'
+         |  AND data_date_part = '$datePart'
+         """.stripMargin
 
-    println("\n-- Tables --")
+    println("\n-- Tablas Hive disponibles --")
     spark.sql("SHOW TABLES").show(false)
 
-    println(s"\n-- Differences ($prefix" + "differences) --")
+    println(s"\n-- Differences (${prefix}differences) --")
     spark.sql(q(prefix + "differences")).show(100, false)
 
-    println(s"\n-- Summary ($prefix" + "summary) --")
+    println(s"\n-- Summary (${prefix}summary) --")
     spark.sql(q(prefix + "summary")).show(100, false)
 
-    println(s"\n-- Duplicates ($prefix" + "duplicates) --")
+    println(s"\n-- Duplicates (${prefix}duplicates) --")
     spark.sql(q(prefix + "duplicates")).show(100, false)
   }
 }
