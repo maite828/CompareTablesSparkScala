@@ -5,7 +5,6 @@
 
 ---
 
-
 # Guía rápida · Motor de comparación de tablas Spark
 
 > **Objetivo ·** Explicar en un único documento el *qué*, *cómo* y *por qué* de la comparación de tablas. Incluye:
@@ -108,13 +107,47 @@ id=6 column=amount  ➜ ONLY_IN_NEW (400.10 sólo en NEW)
 
 ### 3.2 Tabla `result_duplicates`
 
-`origin = ref | new | both` ⇒ dónde aparece el grupo duplicado.
+`origin` indica dónde se detecta el grupo de filas duplicadas:
 
-\| id=5 (ref) | exact=1 | var=1 | occ=2 | «amount: [300.00, 300.50]» | | id=6 (new) | exact=2 | var=1 | occ=3 | «amount: [400.00, 400.10]» |
+| Valor  | Significado                                          |
+| ------ | ---------------------------------------------------- |
+| `ref`  | Sólo en la tabla de referencia.                      |
+| `new`  | Sólo en la tabla nueva.                              |
+| `both` | Existe al menos una fila con esa clave en cada lado. |
 
-Con `priorityCol` el algoritmo selecciona la fila de mayor prioridad antes de contar.
+| Columna | Qué representa                                  | Cómo se calcula                                  |
+| ------- | ----------------------------------------------- | ------------------------------------------------ |
+| ``      | Nº total de filas con esa clave y ese origen.   | `count(*)`                                       |
+| ``      | Filas 100 % iguales entre sí.                   | `occurrences - countDistinct(hash)`              |
+| ``      | Variaciones dentro del mismo id (≠ exactos).    | `max(countDistinct(hash) - 1,0)`                 |
+| ``      | Lista compacta de columnas con más de un valor. | `collect_set` por columna → texto "col: [v1,v2]" |
 
-### 3.3 Tabla `result_summary`
+> **Hash interno** → Para cada fila se concatena clave + columnas no clave y se calcula `sha2(…,256)`. Dos filas son "exact duplicates" si comparten hash.
+
+#### Ejemplo resumido
+
+| origin | id | occ | exact\_dup | var\_dup | variations                |
+| ------ | -- | --- | ---------- | -------- | ------------------------- |
+| ref    | 5  | 2   | 1          | 1        | `amount: [300.00,300.50]` |
+| new    | 6  | 3   | 2          | 1        | `amount: [400.00,400.10]` |
+| both   | 4  | 4   | 2          | 1        | `country: [FR,BR]`        |
+
+- **Filas exactas** de id 4 («200.00 / new») se cuentan en **ref** y **new**, por lo que `origin = both` y `exact_dup = 2`.
+- El mismo id 4 presenta a la vez variaciones (`country`). Por eso `duplicates_w_variations = 1`.
+
+#### Cuándo se cumple cada caso
+
+1. **Exact duplicates** (`exact_dup > 0`):
+   - Todas las columnas (clave + resto) coinciden.
+   - El número es la cantidad de filas redundantes (p.ej. 2 filas idénticas ⇒ `exact_dup = 1`).
+2. **Duplicates with variations** (`var_dup > 0`):
+   - Mismo id, pero al menos una columna no clave tiene valores distintos.
+   - Las columnas implicadas aparecen en `variations`.
+3. **Ambos contadores = 0**: no hay duplicados; la fila ganadora se eligió (o `priorityCol`).
+
+—
+
+### 3.3 Tabla `result_summary` Tabla `result_summary`
 
 | bloque/ métrica      | Comentario rápido                                                        |
 | -------------------- | ------------------------------------------------------------------------ |
