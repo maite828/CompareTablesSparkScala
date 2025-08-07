@@ -5,7 +5,40 @@
 
 ---
 
-### **1. Configuración del Sistema**
+
+# Guía rápida · Motor de comparación de tablas Spark
+
+> **Objetivo ·** Explicar en un único documento el *qué*, *cómo* y *por qué* de la comparación de tablas. Incluye:
+>
+> 1. Configuración mínima en Scala **y** su equivalente JSON (legacy).
+> 2. Ejemplo real con las tres tablas de resultado.
+> 3. Interpretación de KPIs, códigos y duplicados.
+> 4. Preguntas frecuentes & mantenimiento.
+
+---
+
+## 1. Configuración
+
+### 1.1 Versión Scala (actual)
+
+```scala
+val cfg = CompareConfig(
+  spark               = spark,
+  refTable            = "default.ref_customers",
+  newTable            = "default.new_customers",
+  partitionSpec       = Some("date=\"2025-07-01\"/geo=\"ES\""),
+  compositeKeyCols    = Seq("id"),
+  ignoreCols          = Seq("last_update"),
+  initiativeName      = "Swift",
+  tablePrefix         = "result_",   // → result_differences / duplicates / summary
+  checkDuplicates     = true,
+  includeEqualsInDiff = true,          // registra también los MATCH
+  autoCreateTables    = true,
+  exportExcelPath     = Some("./output/summary.xlsx")
+)
+```
+
+### 1.2 Equivalente JSON (legacy)
 
 ```json
 {
@@ -22,181 +55,116 @@
 }
 ```
 
-> **Explicación JSON**
->
-> - `refTable`: Tabla de referencia para comparación
-> - `newTable`: Tabla nueva a comparar
-> - `partitionSpec`: Filtra datos por partición específica (formato `[col=valor]`)
-> - `ignoreCols`: Columnas a ignorar en la comparación
-> - `compositeKeyCols`: Define cómo identificar registros clave o eliminar duplicados
-> - `checkDuplicates`: Detecta tanto duplicados exactos como con variaciones
-> - `includeEqualsInDiff`: Controla si se incluyen coincidencias en el reporte de diferencias
+**Campos equivalentes**: `reportTable` → `tablePrefix+"summary"`, etc.  El JSON se mantuvo para PoCs; la API oficial es `CompareConfig`.
+
+| Flag                  | Qué hace                                                       | Valor por defecto |
+| --------------------- | -------------------------------------------------------------- | ----------------- |
+| `includeEqualsInDiff` | Si `true`, guarda las filas **MATCH** en `result_differences`. | `false`           |
+| `checkDuplicates`     | Detecta exactos y variaciones en `result_duplicates`.          | `false`           |
+| `priorityCol`         | (Opcional) Qué columna elegir como "ganadora" en duplicados.   | *None*            |
 
 ---
 
-### **2. Datos de Entrada**
+## 2. Datos de ejemplo simplificados
 
-**Tabla de Referencia (`ref_customers`)**
+> El dataset cubre **TODOS** los casos de negocio: coincidencias, diferencias, gaps y duplicados.
 
-```
-| id | country | amount | status  |
-|----|---------|--------|---------|
-| 1  | US      | 100.50 | active  |
-| 2  | ES      | 75.20  | pending |
-| 3  | MX      | 150.00 | active  |
-| 4  | BR      | 200.00 | new     |
-| 4  | BR      | 200.00 | new     | ← Duplicado idéntico
-| 5  | FR      | 300.00 | active  |
-| 5  | FR      | 300.50 | active  | ← Duplicado con variaciones
-```
+| id       | country | amount        | status  |   | id       | country | amount            | status   |
+| -------- | ------- | ------------- | ------- | - | -------- | ------- | ----------------- | -------- |
+| **REF**  |         |               |         |   | **NEW**  |         |                   |          |
+| 1        | US      | 100.40        | active  |   | 1        | US      | 100.40            | active   |
+| 2        | ES␠     | 1.000…001     | expired |   | 2        | ES      | 1.000…001         | expired  |
+| 3        | MX      | 150.00        | active  |   | –        | –       | –                 | –        |
+| 4        | FR/BR   | 200.00/201.00 | new     |   | 4        | BR      | 200.00×3 / 201.00 | new      |
+| 5        | FR      | 300.00/300.50 | active  |   | –        | –       | –                 | –        |
+| 6        | –       | –             | –       |   | 6        | DE      | 400.00×2 / 400.10 | new      |
+| 7        | PT      | 300.50        | active  |   | 7        | ""      | 300.50            | active   |
+| 8        | BR      | 100.50        | pending |   | 8        | BR      | **null**          | pending  |
+| 9        | AN      | 80.00         | new     |   | 9        | AN      | 80.00             | **null** |
+| 10       | GR      | 60.00         | new     |   | –        | –       | –                 | –        |
+| **NULL** | GR      | 61.00 / 60.00 | new     |   | **NULL** | GR      | 60.00×3 / 61.00   | new      |
 
-**Tabla Nueva (`new_customers`)**
-
-```
-| id | country | amount | status  |
-|----|---------|--------|---------|
-| 1  | US      | 100.49 | active  | ← Diferencia numérica
-| 2  | ES      | 75.20  | expired | ← Diferencia textual
-| 4  | BR      | 200.00 | new     |
-| 4  | BR      | 200.00 | new     | ← Duplicado idéntico
-| 6  | DE      | 400.00 | new     | ← Registro nuevo
-| 6  | DE      | 400.00 | new     | ← Duplicado idéntico
-| 6  | DE      | 400.10 | new     | ← Variación en duplicado
-```
+*Los múltiplos indican duplicados; el espacio en “ES␠” fuerza NO\_MATCH.*
 
 ---
 
-### **3. Resultados de la Comparación**
+## 3. Resultados clave
 
-##### **Tabla 1: Resumen Ejecutivo (`customer_summary`)**
+### 3.1 Tabla `result_differences`
 
-```
-| Métrica                         | count_Ref | count_New | % Ref   | Status       | Ejemplos (IDs)                   |
-|---------------------------------|-----------|-----------|---------|--------------|----------------------------------|
-| Total registros                 | 8         | 9         | 100.0%  | +1           | -                                | ← La tabla nueva tiene 1 registro adicional (ID 6). Total de filas( incluye duplicados), no IDs únicos.
-| Registros 1:1 exactos (Match)   | 1         | 1         | 12.5%   | Match        | ID 4                             | ← Solo ID 4 hace match completo
-| Registros 1:1 con diferencias   | 2         | 2         | 25.0%   | No Match     | ID 1, ID 2                       | ← ID 1, ID 2 no coinciden en los valores
-| Registros 1:0                   | 2         | -         | 25.0%   | Falta        | ID 3, ID 5                       | ← Están solo en referencia
-| Registros 0:1                   | -         | 1         | -       | Sobra        | ID 6                             | ← Solo en tabla nueva
-| Duplicados exactos              | 1         | 1         | 12.5%   | Exactos      | ID 4                             | ← Registros 100% iguales
-| Duplicados con variaciones (ref)| 1         | -         | 12.5%   | Diferencias  | ID 5                             | ← ref tiene 2 versiones distintas
-| Duplicados con variaciones (new)| -         | 1         | -       | Diferencias  | ID 6                             | ← new tiene 2 iguales + 1 variación
-```
+| results                     | Significado                                                      |
+| --------------------------- | ---------------------------------------------------------------- |
+| `MATCH`                     | Valor idéntico en REF y NEW (solo si `includeEqualsInDiff=true`) |
+| `NO_MATCH`                  | id presente en ambos, valor diferente                            |
+| `ONLY_IN_REF / ONLY_IN_NEW` | id ausente en la tabla opuesta                                   |
 
-##### **Y la Tabla con 30k registros debería verse así: 200 columns and 30000 rows**
+Ejemplo (extracto):
 
-```
-+---------+------------------------------+----------+-----------+-------------+--------+----------+
-| bloque  | metrica                      | universo | numerador | denominador |  pct   | ejemplos |
-+---------+------------------------------+----------+-----------+-------------+--------+----------+
-| KPIS    | IDs Uniques                  | REF      | 11        | -           |   -    | -        |
-| KPIS    | IDs Uniques                  | NEW      | 11        | -           |   -    | -        |
-| KPIS    | Total REF                    | ROWS     | 11        | -           |   -    | -        |
-| KPIS    | Total NEW                    | ROWS     | 11        | -           |   -    | -        |
-| KPIS    | Total (NEW-REF)              | REF      | 0         | 11          |  0.0%  | -        |
-| KPIS    | Quality global               | ALL_IDS  | 11        | 11          | 100.0% | -        |
-| MATCH   | 1:1 (exact matches)          | REF      | 11        | 11          | 100.0% | -        |
-| NO MATCH| 1:1 (match not identical)    | REF      | 0         | 11          |  0.0%  | -        |
-| GAP     | 1:0 (only in reference)      | REF      | 0         | 11          |  0.0%  | -        |
-| GAP     | 0:1 (only in new)            | REF      | 0         | 11          |  0.0%  | -        |
-| DUPS    | Duplicates (both)            | REF      | 0         | 11          |  0.0%  | -        |
-| DUPS    | duplicates (ref)             | REF      | 0         | 11          |  0.0%  | -        |
-| DUPS    | Duplicates (new)             | NEW      | 0         | 11          |  0.0%  | -        |
-+---------+------------------------------+----------+-----------+-------------+--------+----------+
+```text
+id=2 column=country ➜ NO_MATCH   ("ES␠" vs "ES")
+id=3 column=country ➜ ONLY_IN_REF
+id=6 column=amount  ➜ ONLY_IN_NEW (400.10 sólo en NEW)
 ```
 
-> **Notas sobre la interpretación de esta tabla:**
->
-> - El foco del análisis se centra en la **tabla de referencia (`ref_customers`)**, ya que el objetivo es validar si la nueva tabla (`new`) puede **reemplazar** completamente a la actual.
-> - El seguimiento se realiza durante un período de prueba, ejecutando comparaciones diarias hasta que ambas tablas sean **idénticas**.
-> - La columna `% Ref` se calcula como `(count_Ref / Total registros Ref) * 100`.
-> - Para filas donde `count_Ref` está vacío (`-`), el valor de `% Ref` también se deja vacío para evitar confusión.
+### 3.2 Tabla `result_duplicates`
 
-##### **Tabla 2: Diferencias Detalladas (`customer_differences`)**
+`origin = ref | new | both` ⇒ dónde aparece el grupo duplicado.
 
-```
-| ID | Campo   | Valor Ref | Valor New | Resultado       |
-|----|---------|-----------|-----------|-----------------|
-| 1  | amount  | 100.50    | 100.49    | DIFERENCIA      | ← Diferencia mínima relevante
-| 2  | status  | pending   | expired   | DIFERENCIA      | ← Cambio de estado
-| 3  | country | MX        | -         | ONLY_IN_REF     | ← Registro solo en referencia pongo solo la primera columna
-| 5  | country | FR        | -         | ONLY_IN_REF     | ← Registro solo en referencia pongo solo la primera columna
-| 6  | country | -         | DE        | ONLY_IN_NEW     | ← Registro nuevo pongo solo la primera columna
-```
+\| id=5 (ref) | exact=1 | var=1 | occ=2 | «amount: [300.00, 300.50]» | | id=6 (new) | exact=2 | var=1 | occ=3 | «amount: [400.00, 400.10]» |
 
-##### **Y la Tabla en modo Extendido debería verse así: (`customer_differences`)**
+Con `priorityCol` el algoritmo selecciona la fila de mayor prioridad antes de contar.
 
-```
-| ID  | Campo   | Valor Ref | Valor New | Resultado       |
-|-----|---------|-----------|-----------|-----------------|
-| 1   | amount  | 100.50    | 100.49    | DIFERENCIA      |
-| 1   | country | US        | US        | COINCIDE        |
-| 1   | status  | active    | active    | COINCIDE        |
-| 2   | amount  | 75.20     | 75.20     | COINCIDE        |
-| 2   | status  | pending   | expired   | DIFERENCIA      |
-| 3   | country | MX        | -         | ONLY_IN_REF     |
-| 3   | amount  | 150.00    | -         | ONLY_IN_REF     |
-| 3   | status  | active    | -         | ONLY_IN_REF     |
-| 4   | country | BR        | BR        | COINCIDE        |
-| 4   | amount  | 200.00    | 200.00    | COINCIDE        |
-| 4   | status  | new       | new       | COINCIDE        |
-| 5   | country | FR        | -         | ONLY_IN_REF     |
-| 5   | amount  | 300.00    | -         | ONLY_IN_REF     |
-| 5   | status  | active    | -         | ONLY_IN_REF     |
-| 6   | country | -         | DE        | ONLY_IN_NEW     |
-| 6   | amount  | -         | 400.00    | ONLY_IN_NEW     |
-| 6   | status  | -         | new       | ONLY_IN_NEW     |
-```
+### 3.3 Tabla `result_summary`
 
-##### **Tabla 3: Detalle de Duplicados (`customer_duplicates`)**
+| bloque/ métrica      | Comentario rápido                                                        |
+| -------------------- | ------------------------------------------------------------------------ |
+| **KPIS**             | Totales y IDs únicos por lado.                                           |
+| **MATCH / NO MATCH** | Sólo se calculan sobre la **intersección** (`idsBoth`). 7 en el ejemplo. |
+| **GAP**              | 1:0 (sólo ref) y 0:1 (sólo new).                                         |
+| **DUPS**             | Duplicados globales.                                                     |
+| **Quality global**   | (MATCH exactos sin duplicados) / IDs REF.                                |
 
-```
-| Origen     | ID | Exactos | Con variaciones | Total | Variaciones              |
-|------------|----|---------|------------------|--------|---------------------------|
-| Referencia | 4  | 2       | 0                | 2      | -                         | ← Registros iguales en tabla de referencia
-| Nuevos     | 4  | 2       | 0                | 2      | -                         | ← Registros iguales también en tabla nueva
-| Referencia | 5  | 0       | 2                | 2      | amount: [300.00, 300.50]  | ← Variación amount respecto al resto
-| Nuevos     | 6  | 2       | 1                | 3      | amount: [400.00, 400.10]  | ← Variación amount respecto al resto
-```
+> ⚠️ **Denominador de bloque BOTH** = `idsBoth`, no IDs NEW.
 
 ---
 
-### **Notas Clave**
+## 4. Lectura rápida de la salida
 
-1. **Precisión absoluta**:
-
-   - `100.50 ≠ 100.49` → Diferencia.
-   - Strings comparados exactamente (`pending ≠ expired`).
-
-2. **Duplicados**:
-
-   - **Idénticos**: Todos los campos iguales (ID 4).
-   - **Con variaciones**: Mismo ID, valores distintos (IDs 5 y 6).
-
-3. **Registros únicos**:
-
-   - `ONLY_IN_REF`: ID 3 (MX), ID 5 (FR).
-   - `ONLY_IN_NEW`: ID 6 (DE).
-
-4. **Consistencia**:
-
-   - Términos uniformes: `COINCIDE`, `DIFERENCIA`, `ONLY_IN_*`.
-
-5. **Modo extendido**:
-
-   - Muestra coincidencias y diferencias para análisis exhaustivos.
-
-> **Notas técnicas**
->
-> - Comparaciones `case-sensitive`.
-> - Comparación numérica exacta.
-> - `NULL` se considera diferencia.
+1. **¿Puedo sustituir la tabla?** → mira `Quality global`. <100 % = todavía hay diferencias.
+2. **¿Qué diferencias existen?** → filtra `result_differences` por `results!='MATCH'`.
+3. **¿Hay duplicados problemáticos?** → `result_duplicates` donde `duplicates_w_variations>0`.
 
 ---
 
-### **¿Cómo leer las tablas?**
+## 5. Modo extendido vs ejecutivo
 
-- **Resumen Ejecutivo**: Panorama general.
-- **Diferencias Detalladas**: Discrepancias relevantes.
-- **Modo Extendido**: Todos los campos comparados.
-- **Duplicados**: Repeticiones y diferencias entre ellas.
+| Modo          | Para quién | Qué muestra                                           |
+| ------------- | ---------- | ----------------------------------------------------- |
+| **Ejecutivo** | Negocio    | KPIs + primeras diferencias (>30 k filas se ocultan). |
+| **Extendido** | Data Ops   | Todas las columnas + MATCH; exportable a Excel.       |
+
+Actívalo con `includeEqualsInDiff=true` y consulta `summary.xlsx`.
+
+---
+
+## 6. Preguntas frecuentes (FAQ)
+
+| Pregunta                                                | Resumen de respuesta                                              |
+| ------------------------------------------------------- | ----------------------------------------------------------------- |
+| *El espacio «ES␠» me genera NO\_MATCH, ¿cómo evitarlo?* | Normaliza valores (`trim/lower`) en `DiffGenerator.canonicalize`. |
+| *¿Se pueden cambiar los códigos «ONLY\_IN*\*»?\_        | Sí, modifica `DiffGenerator.buildDiffStruct`.                     |
+| *¿NULL se cuenta varias veces?*                         | No. Todos los NULLs de la clave se colapsan a `id="NULL"`.        |
+| *¿Puedo comparar más columnas como clave?*              | Define `compositeKeyCols = Seq("id","country").`                  |
+
+---
+
+## 7. Mantenimiento & CI
+
+- **Tests unitarios e integración**: 11 pruebas → `sbt test` (<15 s).
+- **GitHub Actions**: `.github/workflows/ci.yml` ejecuta la batería en cada push.
+- **Snapshots**: actualiza los Parquet dorados tras cambios de lógica.
+
+---
+
+© 2025 · Compare‑tables Spark 3.5.0 · MIT
+
