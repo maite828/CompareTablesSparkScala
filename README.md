@@ -107,43 +107,53 @@ id=6 column=amount  ➜ ONLY_IN_NEW (400.10 sólo en NEW)
 
 ### 3.2 Tabla `result_duplicates`
 
-`origin` indica dónde se detecta el grupo de filas duplicadas:
+`origin` indica dónde se detecta el grupo duplicado:
 
-| Valor  | Significado                                          |
-| ------ | ---------------------------------------------------- |
-| `ref`  | Sólo en la tabla de referencia.                      |
-| `new`  | Sólo en la tabla nueva.                              |
-| `both` | Existe al menos una fila con esa clave en cada lado. |
+| Valor  | Significado                                        |
+| ------ | -------------------------------------------------- |
+| `ref`  | Clave duplicada **solo** en tabla REF.             |
+| `new`  | Clave duplicada **solo** en tabla NEW.             |
+| `both` | Hay al menos una fila con esa clave en cada tabla. |
 
-| Columna | Qué representa                                  | Cómo se calcula                                  |
-| ------- | ----------------------------------------------- | ------------------------------------------------ |
-| ``      | Nº total de filas con esa clave y ese origen.   | `count(*)`                                       |
-| ``      | Filas 100 % iguales entre sí.                   | `occurrences - countDistinct(hash)`              |
-| ``      | Variaciones dentro del mismo id (≠ exactos).    | `max(countDistinct(hash) - 1,0)`                 |
-| ``      | Lista compacta de columnas con más de un valor. | `collect_set` por columna → texto "col: [v1,v2]" |
+| Columna     | Qué representa                                                               |      |
+| ----------- | ---------------------------------------------------------------------------- | ---- |
+| ``          | Clave compuesta (NULL si todas sus columnas son nulas).                      |      |
+| ``          | `occurrences - countDistinct(hash)` → filas 100 % iguales entre sí.          |      |
+| ``          | `max(countDistinct(hash) - 1,0)` → mismo id pero al menos un valor distinto. |      |
+| ``          | Total de filas con ese id y origen.                                          |      |
+| ``          | Columnas con >1 valor: \`col: [v1,v2]                                        | …\`. |
+| ``** / **`` | Particiones de salida añadidas por el controlador.                           |      |
 
-> **Hash interno** → Para cada fila se concatena clave + columnas no clave y se calcula `sha2(…,256)`. Dos filas son "exact duplicates" si comparten hash.
+> **Cómo decide el algoritmo**
+>
+> 1. Genera un *hash de fila* (`sha2`) con todas las columnas salvo `_src`.
+> 2. Agrupa por `origin + id`.
+> 3. Calcula contadores y set de valores.
+> 4. Si se define `priorityCol`, primero se escoge la fila ganadora (máx. prioridad) y se eliminan las demás antes de contar.
 
-#### Ejemplo resumido
+#### Ejemplo real (extracto)
 
-| origin | id | occ | exact\_dup | var\_dup | variations                |
-| ------ | -- | --- | ---------- | -------- | ------------------------- |
-| ref    | 5  | 2   | 1          | 1        | `amount: [300.00,300.50]` |
-| new    | 6  | 3   | 2          | 1        | `amount: [400.00,400.10]` |
-| both   | 4  | 4   | 2          | 1        | `country: [FR,BR]`        |
+| origin | id   | exact\_dup | var\_dup | occ | variations                                        |
+| ------ | ---- | ---------- | -------- | --- | ------------------------------------------------- |
+| ref    | 5    | 0          | 1        | 2   | `amount: [300.000…,300.500…]`                     |
+| ref    | NULL | 0          | 1        | 2   | `amount: [60.000…,61.000…]`                       |
+| new    | NULL | 2          | 1        | 4   | `amount: [60.000…,61.000…]`                       |
+| new    | 6    | 1          | 1        | 3   | `amount: [400.000…,400.100…]`                     |
+| ref    | 4    | 0          | 1        | 2   | `country: [BR,FR] \| amount: [200.000…,201.000…]` |
+| new    | 4    | 2          | 1        | 4   | `amount: [200.000…,201.000…]`                     |
 
-- **Filas exactas** de id 4 («200.00 / new») se cuentan en **ref** y **new**, por lo que `origin = both` y `exact_dup = 2`.
-- El mismo id 4 presenta a la vez variaciones (`country`). Por eso `duplicates_w_variations = 1`.
+- **exact\_dup > 0** → existen *x* filas idénticas (hash repetido).
+- **var\_dup > 0** → dentro de ese id hay al menos dos hashes distintos ⇒ alguna columna cambia.
+- **origin = both** se da cuando REF y NEW presentan duplicados simultáneamente (no ocurre en este extracto, pero puede darse cuando los dos lados tienen ≥2 filas del mismo id).
 
-#### Cuándo se cumple cada caso
+#### Casos comunes
 
-1. **Exact duplicates** (`exact_dup > 0`):
-   - Todas las columnas (clave + resto) coinciden.
-   - El número es la cantidad de filas redundantes (p.ej. 2 filas idénticas ⇒ `exact_dup = 1`).
-2. **Duplicates with variations** (`var_dup > 0`):
-   - Mismo id, pero al menos una columna no clave tiene valores distintos.
-   - Las columnas implicadas aparecen en `variations`.
-3. **Ambos contadores = 0**: no hay duplicados; la fila ganadora se eligió (o `priorityCol`).
+| Situación                                         | exact\_dup | var\_dup | Ejemplo                   |
+| ------------------------------------------------- | ---------- | -------- | ------------------------- |
+| 2 filas idénticas (id 4 en NEW)                   | 1          | 0        | `amount` todos iguales    |
+| 2 filas idénticas **+** 1 variación (id 6 en NEW) | 1          | 1        | `amount` 400.00 vs 400.10 |
+| 2 filas diferentes (id 5 en REF)                  | 0          | 1        | 300.00 vs 300.50          |
+| 1 sola fila                                       | 0          | 0        | sin duplicados            |
 
 —
 
