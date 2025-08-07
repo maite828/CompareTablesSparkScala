@@ -1,8 +1,8 @@
 // src/main/scala/com/example/compare/Main.scala
 
+import java.math.BigDecimal
 import java.time.LocalDate
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.{DataFrame, Row}
+import org.apache.spark.sql.{SparkSession, DataFrame, Row}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
 import org.apache.hadoop.fs.{FileSystem, Path}
@@ -18,57 +18,47 @@ object Main {
 
     import spark.implicits._
 
-    val dataDatePart = "2025-07-01"
-    val geoPart      = "ES"
-    val partitionSpec = Some(s"""data_date_part="$dataDatePart"/geo="$geoPart"""")
-    val initiativeName = "Swift"                  // Nombre de la iniciativa
-    val tablePrefix    = "default.result_"        // Prefijo para tablas de resultados
+    val dataDatePart    = "2025-07-01"
+    val geoPart         = "ES"
+    val partitionSpec   = Some(s"""data_date_part="$dataDatePart"/geo="$geoPart"""")
+    val initiativeName  = "Swift"
+    val tablePrefix     = "default.result_"
 
-
-    // 0) Generar datos de prueba y crear tablas Hive
+    // 0) Generar DataFrames de prueba con DecimalType en place de DoubleType
     val (refDF, newDF) = createTestDataFrames(spark, dataDatePart, geoPart)
     createAndLoadSourceTables(spark, refDF, newDF)
 
-    // 1) Crear y cargar tablas de origen (particionadas por data_date_part y geo)
-    createAndLoadSourceTables(spark, refDF, newDF)
-
-    println(s"✅ Tablas ref_customers y new_customers (particiones: data_date_part, geo) creadas")
+    println(s"✅ Tablas ref_customers y new_customers creadas (particiones: data_date_part, geo)")
     println(s"✅ Iniciativa: $initiativeName")
-    println(s"✅ PartitionSpec usado: ${partitionSpec.getOrElse("-")}")
-    println(s"✅ (data_date_part esperado en resultados): $dataDatePart")
+    println(s"✅ PartitionSpec: ${partitionSpec.getOrElse("-")}")
 
-    // 2) Nombres de tablas de salida
+    // 1) Preparar tablas de resultados
     val diffTableName       = s"${tablePrefix}differences"
     val summaryTableName    = s"${tablePrefix}summary"
     val duplicatesTableName = s"${tablePrefix}duplicates"
-
-    // 3) Eliminar y recrear tablas de resultados (si procede)
     cleanAndPrepareTables(spark, diffTableName, summaryTableName, duplicatesTableName)
 
-    // 4)Construir configuración
+    // 2) Construir CompareConfig
     val config = CompareConfig(
-      spark           = spark,
-      refTable        = "default.ref_customers",
-      newTable        = "default.new_customers",
-      //partitionSpec   = Some("""data_date_part="2025-07-01"/geo="ES""""),
-      partitionSpec   = None,
-      compositeKeyCols= Seq("id","country"),
-      ignoreCols      = Seq("last_update"),
-      initiativeName  = "Swift",
-      tablePrefix     = "default.result_",
-      checkDuplicates = true,
-      includeEqualsInDiff = false,
+      spark            = spark,
+      refTable         = "default.ref_customers",
+      newTable         = "default.new_customers",
+      partitionSpec    = partitionSpec,
+      compositeKeyCols = Seq("id"),
+      ignoreCols       = Seq("last_update"),
+      initiativeName   = initiativeName,
+      tablePrefix      = tablePrefix,
+      checkDuplicates  = true,
+      includeEqualsInDiff = true,
       autoCreateTables = true,
-      exportExcelPath     = Some("./output/summary.xlsx")
-
+      exportExcelPath  = Some("./output/summary.xlsx")
     )
 
-    // 5) Ejecutar comparación
+    // 3) Ejecutar comparación
     TableComparisonController.run(config)
 
-    // 6) Mostrar resultados (data_date_part = dataDatePart)
+    // 4) Mostrar resultados
     showComparisonResults(spark, tablePrefix, initiativeName, dataDatePart)
-
 
     spark.stop()
   }
@@ -77,78 +67,102 @@ object Main {
       spark: SparkSession,
       dataDatePart: String,
       geoPart: String
-  ) = {
-    // Esquema de prueba
+  ): (DataFrame, DataFrame) = {
+    // Esquema con DecimalType(38,18) para 'amount'
     val schema = StructType(Seq(
-      StructField("id", IntegerType, nullable = true),
-      StructField("country", StringType, nullable = true),
-      StructField("amount", DoubleType, nullable = true),
-      StructField("status", StringType, nullable = true)
+      StructField("id", IntegerType,                nullable = true),
+      StructField("country", StringType,             nullable = true),
+      StructField("amount", DecimalType(38, 18),     nullable = true),
+      StructField("status", StringType,              nullable = true)
     ))
 
-    val ref= Seq(
-      Row(1, "US", 100.50, "active"),
-      Row(2, "ES", 75.20, "pending"),
-      Row(3, "MX", 150.00, "active"),
-      Row(4, "FR", 200.00, "new"),
-      Row(4, "BR", 201.00, "new"),
-      Row(5, "FR", 300.00, "active"),
-      Row(5, "FR", 300.50, "active"),
-      Row(7, "PT", 300.50, "active"),
-      Row(8, "BR", 100.50, "pending"),
-      Row(9, "AN", 80.00, "new"),
-      Row(10, "GR", 60.00, "new"),
-      Row(null, "GR", 61.00, "new"),
-      Row(null, "GR", 60.00, "new"),
+    // Datos de referencia (BigDecimal en lugar de Double)
+    val ref = Seq(
+      Row(1: java.lang.Integer, "US", new BigDecimal("100.50"), "active"),
+      Row(2: java.lang.Integer, "ES ", new BigDecimal("1.000000000000000001"), "pending"),
+      Row(3: java.lang.Integer, "MX", new BigDecimal("150.00"), "active"),
+      Row(4: java.lang.Integer, "FR", new BigDecimal("200.00"), "new"),
+      Row(4: java.lang.Integer, "BR", new BigDecimal("201.00"), "new"),
+      Row(5: java.lang.Integer, "FR", new BigDecimal("300.00"), "active"),
+      Row(5: java.lang.Integer, "FR", new BigDecimal("300.50"), "active"),
+      Row(7: java.lang.Integer, "PT", new BigDecimal("300.50"), "active"),
+      Row(8: java.lang.Integer, "BR", new BigDecimal("100.50"), "pending"),
+      Row(9: java.lang.Integer, "AN", new BigDecimal("80.00"), "new"),
+      Row(10: java.lang.Integer, "GR", new BigDecimal("60.00"), "new"),
+      Row(null                 , "GR", new BigDecimal("61.00"), "new"),
+      Row(null                 , "GR", new BigDecimal("60.00"), "new")
     )
 
     val nw = Seq(
-      Row(1, "US", 100.49, "active"),
-      Row(2, "ES", 75.20, "expired"),
-      Row(4, "BR", 201.00, "new"),
-      Row(4, "BR", 200.00, "new"),
-      Row(4, "BR", 200.00, "new"),
-      Row(4, "BR", 200.00, "new"),
-      Row(6, "DE", 400.00, "new"),
-      Row(6, "DE", 400.00, "new"),
-      Row(6, "DE", 400.10, "new"),
-      Row(7, "",   300.50, "active"),
-      Row(8, "BR", null,   "pending"),
-      Row(9, "AN", 80.00,  null),
-      Row(null, "GR", 60.00, "new"),
-      Row(null, "GR", 60.00, "new"),
-      Row(null, "GR", 60.00, "new"),
-      Row(null, "GR", 61.00, "new")
+      Row(1: java.lang.Integer, "US", new BigDecimal("100.49"), "active"),
+      Row(2: java.lang.Integer, "ES", new BigDecimal("1.00000000000000000"), "expired"),
+      Row(4: java.lang.Integer, "BR", new BigDecimal("201.00"), "new"),
+      Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"),
+      Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"),
+      Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"),
+      Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"),
+      Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"),
+      Row(6: java.lang.Integer, "DE", new BigDecimal("400.10"), "new"),
+      Row(7: java.lang.Integer, "",   new BigDecimal("300.50"), "active"),
+      Row(8: java.lang.Integer, "BR", null                    , "pending"),
+      Row(9: java.lang.Integer, "AN", new BigDecimal("80.00"),  null),
+      Row(null                , "GR", new BigDecimal("60.00"), "new"),
+      Row(null                , "GR", new BigDecimal("60.00"), "new"),
+      Row(null                , "GR", new BigDecimal("60.00"), "new"),
+      Row(null                , "GR", new BigDecimal("61.00"), "new")
     )
 
-    val refDF = spark.createDataFrame(spark.sparkContext.parallelize(ref), schema)
-      .withColumn("data_date_part", lit(dataDatePart))
-      .withColumn("geo", lit(geoPart))
-    val newDF = spark.createDataFrame(spark.sparkContext.parallelize(nw), schema)
-      .withColumn("data_date_part", lit(dataDatePart))
-      .withColumn("geo", lit(geoPart))
+    val refDF = spark.createDataFrame(
+      spark.sparkContext.parallelize(ref.asInstanceOf[Seq[Row]]),
+      schema
+    ).withColumn("data_date_part", lit(dataDatePart))
+     .withColumn("geo",            lit(geoPart))
+
+    val newDF = spark.createDataFrame(
+      spark.sparkContext.parallelize(nw.asInstanceOf[Seq[Row]]),
+      schema
+    ).withColumn("data_date_part", lit(dataDatePart))
+     .withColumn("geo",            lit(geoPart))
+
     (refDF, newDF)
   }
 
-  private def createAndLoadSourceTables(spark: SparkSession, refDF: org.apache.spark.sql.DataFrame, newDF: org.apache.spark.sql.DataFrame): Unit = {
+  private def createAndLoadSourceTables(
+      spark: SparkSession,
+      refDF: DataFrame,
+      newDF: DataFrame
+  ): Unit = {
+    // Tabla de referencia
     spark.sql("DROP TABLE IF EXISTS default.ref_customers")
     spark.sql(
-      """CREATE TABLE default.ref_customers (
-        | id INT, country STRING, amount DOUBLE, status STRING
-        |) PARTITIONED BY (data_date_part STRING, geo STRING) STORED AS PARQUET""".stripMargin)
+      """
+        |CREATE TABLE IF NOT EXISTS default.ref_customers (
+        |  id INT,
+        |  country STRING,
+        |  amount DECIMAL(38,18),
+        |  status STRING
+        |)
+        |PARTITIONED BY (data_date_part STRING, geo STRING)
+        |STORED AS PARQUET
+      """.stripMargin)
     refDF.write.mode("overwrite").insertInto("default.ref_customers")
 
+    // Tabla nueva
     spark.sql("DROP TABLE IF EXISTS default.new_customers")
     spark.sql(
-      """CREATE TABLE default.new_customers (
-        | id INT, country STRING, amount DOUBLE, status STRING
-        |) PARTITIONED BY (data_date_part STRING, geo STRING) STORED AS PARQUET""".stripMargin)
+      """
+        |CREATE TABLE IF NOT EXISTS default.new_customers (
+        |  id INT,
+        |  country STRING,
+        |  amount DECIMAL(38,18),
+        |  status STRING
+        |)
+        |PARTITIONED BY (data_date_part STRING, geo STRING)
+        |STORED AS PARQUET
+      """.stripMargin)
     newDF.write.mode("overwrite").insertInto("default.new_customers")
   }
 
-      /**
-   * Elimina tablas de salida y sus ubicaciones físicas (si existen).
-   */
   private def cleanAndPrepareTables(
       spark: SparkSession,
       tableNames: String*
@@ -157,56 +171,46 @@ object Main {
       try {
         val parts = fullTableName.split('.')
         val (db, table) = if (parts.length > 1) (parts(0), parts(1)) else ("default", parts(0))
-        val tableIdentifier = TableIdentifier(table, Some(db))
+        val tabId = TableIdentifier(table, Some(db))
 
-        // 1) Borrar tabla si existe
+        // Drop table
         spark.sql(s"DROP TABLE IF EXISTS $fullTableName PURGE")
 
-        // 2) Borrar ubicación física si existe
-        val fs = FileSystem.get(spark.sparkContext.hadoopConfiguration)
+        // Remove data files
+        val fs      = FileSystem.get(spark.sparkContext.hadoopConfiguration)
         val catalog = spark.sessionState.catalog
-
-        val tableLocation =
-          if (catalog.tableExists(tableIdentifier)) catalog.getTableMetadata(tableIdentifier).location
-          else catalog.defaultTablePath(tableIdentifier)
-
-        val path = new Path(tableLocation.toString)
-        if (fs.exists(path)) {
-          fs.delete(path, true)
-          println(s"Eliminada ubicación física: $path")
-        }
+        val loc     = if (catalog.tableExists(tabId))
+                        catalog.getTableMetadata(tabId).location
+                      else
+                        catalog.defaultTablePath(tabId)
+        val path    = new Path(loc.toString)
+        if (fs.exists(path)) fs.delete(path, true)
       } catch {
         case e: Exception =>
-          println(s"Advertencia: Error al limpiar tabla $fullTableName - ${e.getMessage}")
+          println(s"[WARN] Error cleaning $fullTableName: ${e.getMessage}")
       }
     }
   }
 
-    /** Muestra resultados filtrando por initiative y data_date_part (que será dataDatePart). */
   private def showComparisonResults(
       spark: SparkSession,
-      tablePrefix: String,
-      initiativeName: String,
-      executionDate: String
+      prefix: String,
+      initiative: String,
+      datePart: String
   ): Unit = {
-    val diffTable       = s"${tablePrefix}differences"
-    val summaryTable    = s"${tablePrefix}summary"
-    val duplicatesTable = s"${tablePrefix}duplicates"
+    def q(tbl: String) =
+      s"SELECT * FROM $tbl WHERE initiative = '$initiative' AND data_date_part = '$datePart'"
 
-    def queryWithPartition(table: String) =
-      // s"SELECT * FROM $table WHERE initiative = '$initiativeName' AND data_date_part = '$executionDate'"
-      s"SELECT * FROM $table WHERE initiative = '$initiativeName' AND data_date_part = '${LocalDate.now().toString}'"
-
-    println("\n==== Tablas Hive disponibles ====")
+    println("\n-- Tables --")
     spark.sql("SHOW TABLES").show(false)
 
-    println(s"\n==== Diferencias ($diffTable) ====")
-    spark.sql(queryWithPartition(diffTable)).show(100, false)
+    println(s"\n-- Differences ($prefix" + "differences) --")
+    spark.sql(q(prefix + "differences")).show(100, false)
 
-    println(s"\n==== Resumen comparativo ($summaryTable) ====")
-    spark.sql(queryWithPartition(summaryTable)).show(100, false)
+    println(s"\n-- Summary ($prefix" + "summary) --")
+    spark.sql(q(prefix + "summary")).show(100, false)
 
-    println(s"\n==== Duplicados ($duplicatesTable) ====")
-    spark.sql(queryWithPartition(duplicatesTable)).show(100, false)
+    println(s"\n-- Duplicates ($prefix" + "duplicates) --")
+    spark.sql(q(prefix + "duplicates")).show(100, false)
   }
 }
