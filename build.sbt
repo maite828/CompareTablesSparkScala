@@ -5,11 +5,16 @@ version := "0.1"
 scalaVersion := "2.12.18"
 
 ThisBuild / fork := true
-ThisBuild / javaOptions ++= Seq(
-  "-Dhadoop.home.dir=/tmp/hadoop-dummy",
-  "--add-opens=java.base/java.lang=ALL-UNNAMED",
-  "--add-opens=java.base/java.io=ALL-UNNAMED"
-)
+ThisBuild / javaOptions ++= {
+  val os = sys.props.getOrElse("os.name","").toLowerCase
+  val hadoopHome =
+    if (os.contains("win")) sys.env.getOrElse("HADOOP_HOME", "C:/hadoop-dummy")
+    else "/tmp/hadoop-dummy"
+  Seq(
+    s"-Dhadoop.home.dir=$hadoopHome",
+    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+    "--add-opens=java.base/java.io=ALL-UNNAMED"
+  )
 
 libraryDependencies ++= Seq(
   "org.apache.spark" %% "spark-core" % "3.5.0",
