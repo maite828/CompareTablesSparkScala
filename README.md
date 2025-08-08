@@ -11,6 +11,12 @@
 > 2. Ejemplo real con las tres tablas de resultado.
 > 3. Interpretación de KPIs, códigos y duplicados.
 > 4. Preguntas frecuentes & mantenimiento.
+> 5. Rendimiento & buenas prácticas (Big Data)
+> 6. Cheat‑sheet* de diagnóstico rápido
+> 7. Flujo para investigar (3 tablas → 3 pasos)
+> 8. Modo extendido vs ejecutivo
+> 9. Preguntas frecuentes (FAQ)
+> 10. Mantenimiento & CI
 
 ---
 
