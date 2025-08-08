@@ -1,42 +1,40 @@
-# SBT
+# --- SBT / Scala ---
 target/
 project/target/
 project/project/
+.global/
+.metals/
+.bloop/
+.bsp/
+.ensime_cache/
+.worksheet/
 
-# Scala IDE
-.scala_dependencies
-.worksheet
-
-# IntelliJ
+# --- IDEs ---
 .idea/
 *.iml
-*.iws
-
-# Eclipse
-.project
-.classpath
-.settings/
-
-# VS Code
 .vscode/
 
-# Mac
+# --- macOS / SO ---
 .DS_Store
-
-# Spark/Hive
-metastore_db/
-spark-warehouse/
-derby.log
-
-# Logs
-*.log
-logs/
-
-# Temporary files
-*.tmp
 *.swp
-*~
 
-# Build outputs
-*.class
-*.jar
+# --- Spark / Hive local ---
+spark-warehouse/
+metastore_db/
+derby.log
+derby.log.*
+*.lck
+*.log
+
+# --- Salidas de la app ---
+output/
+result_*/
+**/*.crc
+
+# Si no quieres versionar parquets locales:
+# (descomenta si procede)
+# **/*.parquet
+
+# --- Reports temporales / CI ---
+test-reports/
+task-temp-directory/
