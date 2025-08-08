@@ -35,23 +35,6 @@ val cfg = CompareConfig(
 )
 ```
 
-### 1.2 Equivalente JSON (legacy)
-
-```json
-{
-  "refTable": "db.ref_customers",
-  "newTable": "db.new_customers",
-  "partitionSpec": "[partition_date=2025-07-25]",
-  "compositeKeyCols": ["id"],
-  "ignoreCols": ["last_update"],
-  "reportTable": "customer_summary",
-  "diffTable": "customer_differences",
-  "duplicatesTable": "customer_duplicates",
-  "checkDuplicates": true,
-  "includeEqualsInDiff": false
-}
-```
-
 **Campos equivalentes**: `reportTable` → `tablePrefix+"summary"`, etc.  El JSON se mantuvo para PoCs; la API oficial es `CompareConfig`.
 
 | Flag                  | Qué hace                                                       | Valor por defecto |
