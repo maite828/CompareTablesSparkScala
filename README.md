@@ -339,3 +339,41 @@ Actívalo con `includeEqualsInDiff=true` y consulta `summary.xlsx`.
 
 © 2025 · Compare‑tables Spark 3.5.0 · MIT
 
+
+
+## 9. *Cheat‑sheet* de diagnóstico rápido
+
+| Síntoma observado                               | Mira primero                           | Qué filtrar/ordenar                                 | Lectura/acción típica                                                                                                         |
+| ----------------------------------------------- | -------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `% NO MATCH` alto en BOTH                       | `result_differences`                   | `results = 'NO_MATCH'` → ordena por `id, column`    | Suele ser **normalización** (espacios, mayúsculas) o **reglas de agregación por clave**. Revisa mapeos y prioridad operativa. |
+| Muchos `ONLY_IN_REF` o `ONLY_IN_NEW`            | `result_differences`                   | `results LIKE 'ONLY_IN_%'`                          | **Particiones mal filtradas** o ventanas temporales distintas. Confirma `partitionSpec` y fechas de corte.                    |
+| `duplicates_w_variations` alto                  | `result_duplicates`                    | `var_dup > 0`                                       | La clave se **reescribe** con valores distintos. Revisa procesos upstream, define reglas de consolidación.                    |
+| `exact_duplicates` alto                         | `result_duplicates`                    | `exact_dup > 0`                                     | **Copias exactas** (reprocesos, loads duplicados). Dedup antes de comparar.                                                   |
+| Duplicados en REF **y** NEW para el mismo id    | `result_duplicates`                    | filtra por ese `id` (verás fila `ref` y fila `new`) | El problema **existe en ambos universos**. Planifica corrección en los dos flujos.                                            |
+| Aparece `id = "NULL"` en muchas filas           | `result_summary` + `result_duplicates` | busca `id = 'NULL'`                                 | Claves vacías concentradas. Acordar política de **NULL** y rellenar/descartar en ingestión.                                   |
+| Valores `null` inesperados en NEW               | `result_differences`                   | filtra por columna afectada y `value_new = '-'`     | Campos no mapeados o casteos fallidos. Revisa ETL y *schemas*.                                                                |
+| `Total (NEW-REF)` muy positivo                  | `result_summary`                       | —                                                   | **Suma de filas** en NEW por cargas repetidas o granularidad distinta. Confirma deduplicación y *joins*.                      |
+| `Quality global` baja o inestable               | `result_summary`                       | —                                                   | Cambios de lógica/normalización. Usa CI y snapshots dorados para detectar regresiones.                                        |
+| Log indica **“Excluyendo columnas constantes”** | Consola                                | —                                                   | Comportamiento esperado para evitar ruido. Si necesitas verlas, desactiva la exclusión en la configuración.                   |
+
+> **Tip**: cuando una clave sale `MATCH` pero sospechas diferencias internas, abre `result_duplicates` para ver el **rango de valores** dentro de la clave.
+
+## 10. Flujo para investigar (3 tablas → 3 pasos)
+
+```
+[1] result_summary (KPIs) 
+   ├─ ¿GAP alto? → Revisa particiones / fechas / filtros
+   ├─ ¿DUPS alto? → Ve a result_duplicates
+   └─ ¿NO MATCH alto en BOTH? → Ve a result_differences
+
+[2] result_differences (detalle de qué cambia)
+   ├─ Filtra results != 'MATCH' (id, column)
+   ├─ ¿Strings? mira espacios / mayúsculas
+   ├─ ¿Nums/fechas? mira escala y agregación por clave
+   └─ Si una clave parece estable pero hay ruido → ve a result_duplicates
+
+[3] result_duplicates (por qué hay ruido)
+   ├─ exact_dup > 0 → copias exactas → dedup
+   └─ var_dup  > 0 → reescrituras → reglas de consolidación / prioridad
+```
+
