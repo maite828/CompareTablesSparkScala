@@ -15,6 +15,7 @@ ThisBuild / javaOptions ++= {
     "--add-opens=java.base/java.lang=ALL-UNNAMED",
     "--add-opens=java.base/java.io=ALL-UNNAMED"
   )
+}
 
 libraryDependencies ++= Seq(
   "org.apache.spark" %% "spark-core" % "3.5.0",
