@@ -264,37 +264,7 @@ Mide la **calidad de unicidad** de cada identificador en ambos universos.
 
 ---
 
-## 5. Modo extendido vs ejecutivo
-
-| Modo          | Para quién | Qué muestra                                           |
-| ------------- | ---------- | ----------------------------------------------------- |
-| **Ejecutivo** | Negocio    | KPIs + primeras diferencias (>30 k filas se ocultan). |
-| **Extendido** | Data Ops   | Todas las columnas + MATCH; exportable a Excel.       |
-
-Actívalo con `includeEqualsInDiff=true` y consulta `summary.xlsx`.
-
----
-
-## 6. Preguntas frecuentes (FAQ)
-
-| Pregunta                                                | Resumen de respuesta                                              |
-| ------------------------------------------------------- | ----------------------------------------------------------------- |
-| *El espacio «ES␠» me genera NO\_MATCH, ¿cómo evitarlo?* | Normaliza valores (`trim/lower`) en `DiffGenerator.canonicalize`. |
-| *¿Se pueden cambiar los códigos «ONLY\_IN*\*»?\_        | Sí, modifica `DiffGenerator.buildDiffStruct`.                     |
-| *¿NULL se cuenta varias veces?*                         | No. Todos los NULLs de la clave se colapsan a `id="NULL"`.        |
-| *¿Puedo comparar más columnas como clave?*              | Define `compositeKeyCols = Seq("id","country").`                  |
-
----
-
-## 7. Mantenimiento & CI
-
-- **Tests unitarios e integración**: 11 pruebas → `sbt test` (<15 s).
-- **GitHub Actions**: `.github/workflows/ci.yml` ejecuta la batería en cada push.
-- **Snapshots**: actualiza los Parquet dorados tras cambios de lógica.
-
----
-
-## 8. Rendimiento & buenas prácticas (Big Data)
+## 5. Rendimiento & buenas prácticas (Big Data)
 
 **Escala objetivo.** El motor está probado para tablas anchas y millones de filas. Aun así, la comparación hace *full outer join* y agregaciones por clave: el *shuffle* puede ser costoso si no se filtra bien.
 
@@ -322,7 +292,7 @@ Actívalo con `includeEqualsInDiff=true` y consulta `summary.xlsx`.
 
 
 
-## 9. *Cheat‑sheet* de diagnóstico rápido
+## 6. *Cheat‑sheet* de diagnóstico rápido
 
 | Síntoma observado                               | Mira primero                           | Qué filtrar/ordenar                                 | Lectura/acción típica                                                                                                         |
 | ----------------------------------------------- | -------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -339,7 +309,7 @@ Actívalo con `includeEqualsInDiff=true` y consulta `summary.xlsx`.
 
 > **Tip**: cuando una clave sale `MATCH` pero sospechas diferencias internas, abre `result_duplicates` para ver el **rango de valores** dentro de la clave.
 
-## 10. Flujo para investigar (3 tablas → 3 pasos)
+## 7. Flujo para investigar (3 tablas → 3 pasos)
 
 ```
 [1] result_summary (KPIs) 
@@ -357,7 +327,37 @@ Actívalo con `includeEqualsInDiff=true` y consulta `summary.xlsx`.
    ├─ exact_dup > 0 → copias exactas → dedup
    └─ var_dup  > 0 → reescrituras → reglas de consolidación / prioridad
 ```
+---
 
+## 8. Modo extendido vs ejecutivo
+
+| Modo          | Para quién | Qué muestra                                           |
+| ------------- | ---------- | ----------------------------------------------------- |
+| **Ejecutivo** | Negocio    | KPIs + primeras diferencias (>30 k filas se ocultan). |
+| **Extendido** | Data Ops   | Todas las columnas + MATCH; exportable a Excel.       |
+
+Actívalo con `includeEqualsInDiff=true` y consulta `summary.xlsx`.
+
+---
+
+## 9. Preguntas frecuentes (FAQ)
+
+| Pregunta                                                | Resumen de respuesta                                              |
+| ------------------------------------------------------- | ----------------------------------------------------------------- |
+| *El espacio «ES␠» me genera NO\_MATCH, ¿cómo evitarlo?* | Normaliza valores (`trim/lower`) en `DiffGenerator.canonicalize`. |
+| *¿Se pueden cambiar los códigos «ONLY\_IN*\*»?\_        | Sí, modifica `DiffGenerator.buildDiffStruct`.                     |
+| *¿NULL se cuenta varias veces?*                         | No. Todos los NULLs de la clave se colapsan a `id="NULL"`.        |
+| *¿Puedo comparar más columnas como clave?*              | Define `compositeKeyCols = Seq("id","country").`                  |
+
+---
+
+## 10. Mantenimiento & CI
+
+- **Tests unitarios e integración**: 11 pruebas → `sbt test` (<15 s).
+- **GitHub Actions**: `.github/workflows/ci.yml` ejecuta la batería en cada push.
+- **Snapshots**: actualiza los Parquet dorados tras cambios de lógica.
+
+---
 
 ---
 
