@@ -337,8 +337,6 @@ Actívalo con `includeEqualsInDiff=true` y consulta `summary.xlsx`.
 
 ---
 
-© 2025 · Compare‑tables Spark 3.5.0 · MIT
-
 
 
 ## 9. *Cheat‑sheet* de diagnóstico rápido
@@ -377,3 +375,7 @@ Actívalo con `includeEqualsInDiff=true` y consulta `summary.xlsx`.
    └─ var_dup  > 0 → reescrituras → reglas de consolidación / prioridad
 ```
 
+
+---
+
+© 2025 · Compare‑tables Spark 3.5.0 · MIT
