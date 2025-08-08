@@ -99,38 +99,38 @@ val cfg = CompareConfig(
 
 **Cómo se calcula (visión funcional)**
 
-1. **Normalización de claves vacías**\
+1. **Normalización de claves vacías**
    Valores vacíos en las columnas clave se tratan como **NULL**, de modo que todas las filas sin clave se agrupan bajo el id `"NULL"`. Esto afecta a la intersección y a los denominadores del resumen.
 
-2. **Columnas constantes se omiten**\
+2. **Columnas constantes se omiten**
    Si una columna tiene el **mismo valor en todo el dataset** (tanto en REF como en NEW), no se incluye en `result_differences`. Así evitas ruido en tablas anchas.
 
-3. **Fila de mayor prioridad (opcional)**\
+3. **Fila de mayor prioridad (opcional)**
    Si defines una columna de prioridad, para cada clave se conserva **una única fila** (la de mayor prioridad) **antes** de comparar. Esto estabiliza el resultado cuando hay duplicados operativos. Los duplicados siguen viéndose en `result_duplicates`.
 
-4. **Valor representativo por clave**\
+4. **Valor representativo por clave**
    Cuando una clave aparece varias veces, se elige **un valor por columna** para compararlo entre REF y NEW. Reglas por defecto:
 
-- **Numéricos/fechas/booleanos** → se toma el **máximo** (robusto ante ruido bajo).
-- **Textos** → se usa el **orden natural** para elegir un valor estable.
-- **Estructuras/arrays/mapas** → se comparan en formato JSON; en **mapas** el orden de pares no afecta, en **arrays** **sí** importa el orden.
+* **Numéricos/fechas/booleanos** → se toma el **máximo** (robusto ante ruido bajo).
+* **Textos** → se usa el **orden natural** para elegir un valor estable.
+* **Estructuras/arrays/mapas** → se comparan en formato JSON; en **mapas** el orden de pares no afecta, en **arrays** **sí** importa el orden.
 
 > Esto explica por qué, en claves con varias filas (p. ej. id `NULL` con importes 60/61), el diff puede salir `MATCH`: si en ambos lados el valor representativo seleccionado coincide.
 
-5. **Política de nulos en la comparación de claves**\
+5. **Política de nulos en la comparación de claves**
    Dos claves **NULL** pueden considerarse iguales (comportamiento por defecto). Si deseas tratarlas siempre como diferentes, cambia la política de emparejamiento de claves nulas.
 
 6. **Formateo fiel de valores**
 
-- Los decimales **conservan la escala**: `1.2000` se muestra como `1.2000`.
-- Los nulos/vacíos en valores (no claves) se muestran como `-` para facilitar lectura.
+* Los decimales **conservan la escala**: `1.2000` se muestra como `1.2000`.
+* Los nulos/vacíos en valores (no claves) se muestran como `-` para facilitar lectura.
 
 **Casos borde típicos con el dataset de ejemplo**
 
-- `id=2`, `country`: `"ES␠"` vs `"ES"` → `NO_MATCH` por espacio en blanco.
-- `id=3` presente sólo en REF → varias filas `ONLY_IN_REF` (una por columna comparada).
-- `id=6` presente sólo en NEW → varias filas `ONLY_IN_NEW`.
-- `id=NULL` (claves vacías): al agregar por clave, ambos lados comparten un valor representativo común para `amount` → puede aparecer como `MATCH` en modo extendido; las **variaciones internas** se ven en `result_duplicates`.
+* `id=2`, `country`: `"ES␠"` vs `"ES"` → `NO_MATCH` por espacio en blanco.
+* `id=3` presente sólo en REF → varias filas `ONLY_IN_REF` (una por columna comparada).
+* `id=6` presente sólo en NEW → varias filas `ONLY_IN_NEW`.
+* `id=NULL` (claves vacías): al agregar por clave, ambos lados comparten un valor representativo común para `amount` → puede aparecer como `MATCH` en modo extendido; las **variaciones internas** se ven en `result_duplicates`.
 
 **Cómo leerla eficazmente**
 
@@ -155,20 +155,21 @@ Mide la **calidad de unicidad** de cada identificador en ambos universos.
 1. Para cada fila se crea una «huella» digital que resume todas sus columnas.
 2. Se agrupa por *origen* (REF o NEW) y *id compuesto*.
 3. Para cada grupo se calculan:
-   - **Total de filas** (`occurrences`).
-   - **Filas repetidas al 100 %** (`exact_duplicates`).\
+
+   * **Total de filas** (`occurrences`).
+   * **Filas repetidas al 100 %** (`exact_duplicates`).
      ⇒ mismo id + huella idéntica.
-   - **Filas con al menos una diferencia** (`duplicates_w_variations`).
-   - **Variaciones detectadas**: qué columnas cambian y sus valores.
-4. Si un mismo id presenta duplicados en los dos lados verás dos registros (uno `ref` y otro `new`).
+   * **Filas con al menos una diferencia** (`duplicates_w_variations`).
+   * **Variaciones detectadas**: qué columnas cambian y sus valores.
+4. Si un mismo id presenta duplicados en los dos lados verás **dos registros** (uno `ref` y otro `new`). *No existe el valor **`both`** en la salida actual*.
 
 | origin | Interpretación rápida                  |
 | ------ | -------------------------------------- |
 | `ref`  | Duplicados sólo en la tabla histórica. |
 | `new`  | Duplicados sólo en la tabla candidata. |
 
-> Para localizar rápidamente qué causa el problema:\
-> *`exact_duplicates`*\* alto\* ⇒ copias exactas.\
+> Para localizar rápidamente qué causa el problema:
+> *`exact_duplicates`*\* alto\* ⇒ copias exactas.
 > *`duplicates_w_variations`*\* alto\* ⇒ la clave se reescribe con valores distintos.
 
 #### Ejemplo real (extracto)
@@ -182,9 +183,8 @@ Mide la **calidad de unicidad** de cada identificador en ambos universos.
 | ref    | 4    | 0          | 1        | 2   | `country: [BR,FR] \| amount: [200.000…,201.000…]` |
 | new    | 4    | 2          | 1        | 4   | `amount: [200.000…,201.000…]`                     |
 
-- **exact\_dup > 0** → existen *x* filas idénticas (hash repetido).
-- **var\_dup > 0** → dentro de ese id hay al menos dos hashes distintos ⇒ alguna columna cambia.
-- **origin = both** se da cuando REF y NEW presentan duplicados simultáneamente (no ocurre en este extracto, pero puede darse cuando los dos lados tienen ≥2 filas del mismo id).
+* **exact\_dup > 0** → existen *x* filas idénticas (hash repetido).
+* **var\_dup > 0** → dentro de ese id hay al menos dos hashes distintos ⇒ alguna columna cambia.
 
 #### Casos comunes
 
@@ -197,19 +197,70 @@ Mide la **calidad de unicidad** de cada identificador en ambos universos.
 
 —
 
-### 3.3 Tabla `result_summary` Tabla `result_summary`
+### 3.3 Tabla `result_summary`
 
-| bloque/ métrica      | Comentario rápido                                                        |
-| -------------------- | ------------------------------------------------------------------------ |
-| **KPIS**             | Totales y IDs únicos por lado.                                           |
-| **MATCH / NO MATCH** | Sólo se calculan sobre la **intersección** (`idsBoth`). 7 en el ejemplo. |
-| **GAP**              | 1:0 (sólo ref) y 0:1 (sólo new).                                         |
-| **DUPS**             | Duplicados globales.                                                     |
-| **Quality global**   | (MATCH exactos sin duplicados) / IDs REF.                                |
+**Qué es.** Panel de KPIs a nivel de clave construido a partir de las tres salidas. Responde en segundos: tamaños, intersección, gaps, duplicados y *calidad global*.
 
-> ⚠️ **Denominador de bloque BOTH** = `idsBoth`, no IDs NEW.
+**Columnas**
 
----
+* **bloque**: familia de métrica (KPIS, MATCH, NO MATCH, GAP, DUPS).
+* **metrica**: descripción legible de lo contado.
+* **universo**: ámbito de cómputo (REF, NEW o BOTH).
+* **numerador**: cantidad principal.
+* **denominador**: referencia para el % (si aplica).
+* **pct**: porcentaje formateado con 1 decimal (si `denominador=0` → "-").
+* **ejemplos**: muestra de IDs para inspección rápida.
+
+#### Cómo se calcula cada bloque
+
+* **KPIS**
+
+  * *IDs Uniques (REF/NEW)*: nº de claves **distintas** por lado. Todas las claves vacías se consolidan como `id="NULL"`.
+  * *Total REF / Total NEW (ROWS)*: nº de **filas** (incluye duplicados).
+  * *Total (NEW-REF)*: diferencia de filas (NEW − REF) y % respecto a **filas REF**.
+* **MATCH / NO MATCH (BOTH)**
+
+  * **Universo = intersección de claves** (claves presentes en ambos lados).
+  * *1:1 (exact matches)*: nº de claves de la intersección cuyos **valores representativos** por columna son idénticos.
+  * *1:1 (match not identical)*: nº de claves de la intersección con **al menos una diferencia** (`NO_MATCH` u `ONLY_IN_*`).
+* **GAP**
+
+  * *1:0 (only in reference)*: claves que sólo existen en REF.
+  * *0:1 (only in new)*: claves que sólo existen en NEW.
+* **DUPS**
+
+  * *duplicates (both)*: claves con duplicados **en ambos lados**.
+  * *duplicates (ref)*: claves con duplicados **sólo** en REF.
+  * *duplicates (new)*: claves con duplicados **sólo** en NEW.
+* **Quality global (REF)**
+
+  * Fórmula: **(claves con match exacto y sin duplicados en ningún lado) / (IDs únicos REF)**.
+
+#### Denominadores (qué significan)
+
+* Filas con **universo REF o NEW** → el denominador se deja "-", salvo:
+
+  * *Total (NEW-REF)* → referencia = **filas REF**.
+  * *Quality global*  → referencia = **IDs únicos REF**.
+* Filas con **universo BOTH** → denominador = **nº de claves en la intersección**.
+
+#### Ejemplo con los datos de la sección 2
+
+* **IDs únicos**: REF = 10, NEW = 8.
+* **Filas totales**: REF = 13, NEW = 16 → *Total (NEW-REF) = 3* y % sobre REF = **23.1%**.
+* **Intersección de claves**: 7
+
+  * *1:1 exact matches*: 2 (id=1, id=NULL) → **28.6%**.
+  * *1:1 con diferencias*: 5 (2,4,7,8,9) → **71.4%**.
+* **GAPs**: sólo REF = 3 (10,3,5) · sólo NEW = 1 (6).
+* **Duplicados**: both = 2 (4, NULL), ref = 1 (5), new = 1 (6).
+* **Quality global**: 1 / 10 = **10.0%**.
+
+#### Consejos de lectura
+
+* Si el % de **NO MATCH** es alto en BOTH, revisa normalizaciones (espacios, mayúsculas/minúsculas) y las reglas de agregación por clave.
+* Si una clave aparece con **variaciones** en `result_duplicates`, esa clave **no** suma en el numerador de *Quality global*.
+* Para drill‑down: filtra `result_differences` por `results != 'MATCH'` y ordena por `id, column`.
 
 ## 4. Lectura rápida de la salida
 
@@ -243,12 +294,10 @@ Actívalo con `includeEqualsInDiff=true` y consulta `summary.xlsx`.
 
 ## 7. Mantenimiento & CI
 
-- **Tests unitarios e integración**: 11 pruebas → `sbt test` (<15 s).
-- **GitHub Actions**: `.github/workflows/ci.yml` ejecuta la batería en cada push.
-- **Snapshots**: actualiza los Parquet dorados tras cambios de lógica.
+* **Tests unitarios e integración**: 11 pruebas → `sbt test` (<15 s).
+* **GitHub Actions**: `.github/workflows/ci.yml` ejecuta la batería en cada push.
+* **Snapshots**: actualiza los Parquet dorados tras cambios de lógica.
 
 ---
 
 © 2025 · Compare‑tables Spark 3.5.0 · MIT
-
-
