@@ -364,7 +364,6 @@ Actívalo con `includeEqualsInDiff=true` y consulta `summary.xlsx`.
 - **Snapshots**: actualiza los Parquet dorados tras cambios de lógica.
 
 ---
-
+© 2025 · Compare‑tables Spark 3.5.0 · MIT
 ---
 
-© 2025 · Compare‑tables Spark 3.5.0 · MIT
