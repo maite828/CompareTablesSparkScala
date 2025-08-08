@@ -13,7 +13,6 @@ import org.apache.spark.sql.SparkSession
   * Uso:
   * ```scala
   * class MiSpec extends AnyFlatSpec with Matchers with SparkSessionTestWrapper {
-  *   // ya tienes `spark` disponible
   * }
   * ```
   */
