@@ -17,7 +17,43 @@
 > 8. Modo extendido vs ejecutivo
 > 9. Preguntas frecuentes (FAQ)
 > 10. Mantenimiento & CI
+---
+---
 
+## 0. Quick start (local)
+
+### macOS / Linux
+
+```bash
+chmod +x scripts/bootstrap.sh run_compare.sh
+./scripts/bootstrap.sh
+./run_compare.sh
+```
+
+### Windows (PowerShell)
+
+```powershell
+# una sola vez si es necesario
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force
+
+./scripts/bootstrap.ps1
+./run_compare.ps1
+```
+
+**Qué deja listo**
+
+- JDK 11 y `sbt` instalados vía Coursier.
+- Directorio Hadoop "dummy" configurado para evitar errores locales.
+- Proyecto compilado y ejecutado con Spark 3.5.
+
+**Dónde ver resultados**
+
+- Tablas Parquet bajo `spark-warehouse/`:
+  - `result_differences/`, `result_duplicates/`, `result_summary/` (particionadas por `initiative` y `data_date_part`).
+- Resumen en Excel (si está activado): `output/summary.xlsx`.
+
+> Tip: para validar rápidamente, ejecuta `sbt test`.
+> 
 ---
 
 ## 1. Configuración
