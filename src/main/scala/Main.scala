@@ -1,33 +1,14 @@
-/**
- * Main object for comparing two Spark tables with partitioning and decimal support.
- *
- * This program:
- *  - Generates test DataFrames with `DecimalType` columns for high-precision numeric comparison.
- *  - Creates and loads Hive tables (`ref_customers` and `new_customers`) partitioned by `date` and `geo`.
- *  - Cleans up and prepares result tables for differences, summary, and duplicates.
- *  - Configures comparison parameters via `CompareConfig`, including composite keys, ignored columns, and output options.
- *  - Runs the table comparison logic using `TableComparisonController`.
- *  - Displays results from the comparison, including differences, summary, and duplicates.
- *
- * Key Features:
- *  - Uses `DecimalType(38,18)` for precise numeric comparisons.
- *  - Handles partitioned tables and custom partition specs.
- *  - Supports duplicate detection and exclusion of equal rows from differences.
- *  - Optionally exports summary results to Excel.
- *
- * Usage:
- *  - Designed for local Spark execution with Hive support enabled.
- *  - Intended for testing and validating table comparison logic in Spark environments.
- */
 // src/main/scala/com/example/compare/Main.scala
 
 import java.math.BigDecimal
-import java.time.LocalDate
 import org.apache.spark.sql.{SparkSession, DataFrame, Row}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.spark.sql.catalyst.TableIdentifier
+
+// Importa el CompareConfig nuevo (con compatibilidad Hive)
+import CompareConfig._
 
 object Main {
   def main(args: Array[String]): Unit = {
@@ -37,15 +18,13 @@ object Main {
       .enableHiveSupport()
       .getOrCreate()
 
-    import spark.implicits._
-
     val dataDatePart    = "2025-07-01"
     val geoPart         = "ES"
     val partitionSpec   = Some(s"""date="$dataDatePart"/geo="$geoPart"""")
     val initiativeName  = "Swift"
     val tablePrefix     = "default.result_"
 
-    // 0) Generar DataFrames de prueba con DecimalType en place de DoubleType
+    // 0) Generar DataFrames de prueba con DecimalType(38,18)
     val (refDF, newDF) = createTestDataFrames(spark, dataDatePart, geoPart)
     createAndLoadSourceTables(spark, refDF, newDF)
 
@@ -53,26 +32,27 @@ object Main {
     println(s"✅ Iniciativa: $initiativeName")
     println(s"✅ PartitionSpec: ${partitionSpec.getOrElse("-")}")
 
-    // 1) Preparar tablas de resultados
+    // 1) Preparar tablas de resultados (limpieza fuerte)
     val diffTableName       = s"${tablePrefix}differences"
     val summaryTableName    = s"${tablePrefix}summary"
     val duplicatesTableName = s"${tablePrefix}duplicates"
     cleanAndPrepareTables(spark, diffTableName, summaryTableName, duplicatesTableName)
 
-    // 2) Construir CompareConfig
+    // 2) Construir CompareConfig (modo compat: Hive → Hive)
     val config = CompareConfig(
-      spark            = spark,
-      refTable         = "default.ref_customers",
-      newTable         = "default.new_customers",
-      partitionSpec    = partitionSpec,
-      compositeKeyCols = Seq("id"),
-      ignoreCols       = Seq("last_update"),
-      initiativeName   = initiativeName,
-      tablePrefix      = tablePrefix,
-      checkDuplicates  = true,
-      includeEqualsInDiff = true,
-      autoCreateTables = true,
-      exportExcelPath  = Some("./output/summary.xlsx")
+      spark              = spark,
+      refTable           = "default.ref_customers",
+      newTable           = "default.new_customers",
+      partitionSpec      = partitionSpec,
+      compositeKeyCols   = Seq("id"),
+      ignoreCols         = Seq("last_update"),
+      initiativeName     = initiativeName,
+      tablePrefix        = tablePrefix,
+      checkDuplicates    = true,
+      includeEqualsInDiff= true,
+      autoCreateTables   = true,
+      // el resto usa defaults (nullKeyMatches=true, etc.)
+      exportExcelPath    = Some("./output/summary.xlsx")
     )
 
     // 3) Ejecutar comparación
@@ -89,27 +69,25 @@ object Main {
       dataDatePart: String,
       geoPart: String
   ): (DataFrame, DataFrame) = {
-    // Esquema con DecimalType(38,18) para 'amount'
     val schema = StructType(Seq(
-      StructField("id", IntegerType,                nullable = true),
-      StructField("country", StringType,             nullable = true),
-      StructField("amount", DecimalType(38, 18),     nullable = true),
-      StructField("status", StringType,              nullable = true)
+      StructField("id", IntegerType,            nullable = true),
+      StructField("country", StringType,        nullable = true),
+      StructField("amount", DecimalType(38,18), nullable = true),
+      StructField("status", StringType,         nullable = true)
     ))
 
-    // Datos de referencia (BigDecimal en lugar de Double)
-    val ref = Seq(
-      Row(1: java.lang.Integer, "US", new BigDecimal("100.40"), "active"),
+   val ref = Seq(
       Row(1: java.lang.Integer, "US", new BigDecimal("100.40"), "active"),
       Row(2: java.lang.Integer, "ES ", new BigDecimal("1.000000000000000001"), "expired"),
-      Row(3: java.lang.Integer, "MX", new BigDecimal("150.00"), "active"),// No en new
-      Row(4: java.lang.Integer, "FR", new BigDecimal("200.00"), "new"),   // ---> Repeated
-      Row(4: java.lang.Integer, "BR", new BigDecimal("201.00"), "new"),   // ---> Repeated with different country
-      Row(5: java.lang.Integer, "FR", new BigDecimal("300.00"), "active"),// ---> Repeated with different amount y  No en new
-      Row(5: java.lang.Integer, "FR", new BigDecimal("300.50"), "active"),// ---> Repeated with different amount y  No en new
+      Row(3: java.lang.Integer, "MX", new BigDecimal("150.00"), "active"),
+      Row(4: java.lang.Integer, "FR", new BigDecimal("200.00"), "new"),
+      Row(4: java.lang.Integer, "BR", new BigDecimal("201.00"), "new"),
+      Row(5: java.lang.Integer, "FR", new BigDecimal("300.00"), "active"),
+      Row(5: java.lang.Integer, "FR", new BigDecimal("300.50"), "active"),
       Row(7: java.lang.Integer, "PT", new BigDecimal("300.50"), "active"),
       Row(8: java.lang.Integer, "BR", new BigDecimal("100.50"), "pending"),
-      Row(10: java.lang.Integer, "GR", new BigDecimal("60.00"), "new"), // No en new
+      Row(9: java.lang.Integer, "AN", new BigDecimal("80.00"), "new"),
+      Row(10: java.lang.Integer, "GR", new BigDecimal("60.00"), "new"),
       Row(null                 , "GR", new BigDecimal("61.00"), "new"),
       Row(null                 , "GR", new BigDecimal("60.00"), "new")
     )
@@ -117,32 +95,29 @@ object Main {
     val nw = Seq(
       Row(1: java.lang.Integer, "US", new BigDecimal("100.40"), "active"),
       Row(2: java.lang.Integer, "ES", new BigDecimal("1.000000000000000001"), "expired"),
-      Row(4: java.lang.Integer, "BR", new BigDecimal("201.00"), "new"), // ---> Repeated with different amount
-      Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"), // ---> Identical Repeated
-      Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"), // ---> Identical Repeated
-      Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"), // ---> Identical Repeated
-      Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"), // ---> Repeated and No en ref
-      Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"), // ---> Repeated and No en ref
-      Row(6: java.lang.Integer, "DE", new BigDecimal("400.10"), "new"), // ---> Repeated and No en ref with different amount
+      Row(4: java.lang.Integer, "BR", new BigDecimal("201.00"), "new"),
+      Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"),
+      Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"),
+      Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"),
+      Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"),
+      Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"),
+      Row(6: java.lang.Integer, "DE", new BigDecimal("400.10"), "new"),
       Row(7: java.lang.Integer, "",   new BigDecimal("300.50"), "active"),
       Row(8: java.lang.Integer, "BR", null                    , "pending"),
+      Row(9: java.lang.Integer, "AN", new BigDecimal("80.00"),  null),
       Row(null                , "GR", new BigDecimal("60.00"), "new"),
-      Row(null                , "GR", new BigDecimal("60.00"), "new"), // ---> Identical Repeated
-      Row(null                , "GR", new BigDecimal("60.00"), "new"), // ---> Identical Repeated
-      Row(null                , "GR", new BigDecimal("61.00"), "new")  // ---> Repeated with different amount
+      Row(null                , "GR", new BigDecimal("60.00"), "new"),
+      Row(null                , "GR", new BigDecimal("60.00"), "new"),
+      Row(null                , "GR", new BigDecimal("61.00"), "new")
     )
 
-    val refDF = spark.createDataFrame(
-      spark.sparkContext.parallelize(ref.asInstanceOf[Seq[Row]]),
-      schema
-    ).withColumn("date", lit(dataDatePart))
-     .withColumn("geo",            lit(geoPart))
+    val refDF = spark.createDataFrame(spark.sparkContext.parallelize(ref.asInstanceOf[Seq[Row]]), schema)
+      .withColumn("date", lit(dataDatePart))
+      .withColumn("geo",  lit(geoPart))
 
-    val newDF = spark.createDataFrame(
-      spark.sparkContext.parallelize(nw.asInstanceOf[Seq[Row]]),
-      schema
-    ).withColumn("date", lit(dataDatePart))
-     .withColumn("geo",            lit(geoPart))
+    val newDF = spark.createDataFrame(spark.sparkContext.parallelize(nw.asInstanceOf[Seq[Row]]), schema)
+      .withColumn("date", lit(dataDatePart))
+      .withColumn("geo",  lit(geoPart))
 
     (refDF, newDF)
   }
@@ -152,7 +127,7 @@ object Main {
       refDF: DataFrame,
       newDF: DataFrame
   ): Unit = {
-    // Tabla de referencia
+    // ref
     spark.sql("DROP TABLE IF EXISTS default.ref_customers")
     spark.sql(
       """
@@ -167,7 +142,7 @@ object Main {
       """.stripMargin)
     refDF.write.mode("overwrite").insertInto("default.ref_customers")
 
-    // Tabla nueva
+    // new
     spark.sql("DROP TABLE IF EXISTS default.new_customers")
     spark.sql(
       """
@@ -193,17 +168,16 @@ object Main {
         val (db, table) = if (parts.length > 1) (parts(0), parts(1)) else ("default", parts(0))
         val tabId = TableIdentifier(table, Some(db))
 
-        // Drop table
         spark.sql(s"DROP TABLE IF EXISTS $fullTableName PURGE")
 
-        // Remove data files
         val fs      = FileSystem.get(spark.sparkContext.hadoopConfiguration)
         val catalog = spark.sessionState.catalog
         val loc     = if (catalog.tableExists(tabId))
-                        catalog.getTableMetadata(tabId).location
-                      else
-                        catalog.defaultTablePath(tabId)
-        val path    = new Path(loc.toString)
+          catalog.getTableMetadata(tabId).location
+        else
+          catalog.defaultTablePath(tabId)
+
+        val path = new Path(loc.toString)
         if (fs.exists(path)) fs.delete(path, true)
       } catch {
         case e: Exception =>

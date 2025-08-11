@@ -4,6 +4,10 @@ version := "0.1"
 
 scalaVersion := "2.12.18"
 
+// Configurar Java 11
+javacOptions ++= Seq("-source", "11", "-target", "11")
+javaOptions ++= Seq("-Dfile.encoding=UTF-8")
+
 ThisBuild / fork := true
 ThisBuild / javaOptions ++= {
   val os = sys.props.getOrElse("os.name","").toLowerCase
@@ -13,7 +17,13 @@ ThisBuild / javaOptions ++= {
   Seq(
     s"-Dhadoop.home.dir=$hadoopHome",
     "--add-opens=java.base/java.lang=ALL-UNNAMED",
-    "--add-opens=java.base/java.io=ALL-UNNAMED"
+    "--add-opens=java.base/java.io=ALL-UNNAMED",
+    "--add-opens=java.base/java.util=ALL-UNNAMED",
+    "--add-opens=java.base/java.nio=ALL-UNNAMED",
+    "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED",
+    "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+    "--add-opens=java.base/java.text=ALL-UNNAMED",
+    "--add-opens=java.desktop/java.awt.font=ALL-UNNAMED"
   )
 }
 

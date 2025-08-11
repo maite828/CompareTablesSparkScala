@@ -26,15 +26,18 @@ class DuplicateDetectorSpec extends AnyFlatSpec with Matchers with SparkSessionT
     val newDf = spark.createDataFrame(spark.sparkContext.emptyRDD[Row], schema)
 
     val config = CompareConfig(
-      spark            = spark,
-      refTable         = "",
-      newTable         = "",
-      partitionSpec    = None,
-      compositeKeyCols = Seq("id"),
-      ignoreCols       = Seq.empty,
-      initiativeName   = "",
-      tablePrefix      = "",
-      checkDuplicates  = true
+      spark,
+      "dummy.ref",
+      "dummy.new",
+      None,
+      Seq("id"),
+      Seq.empty,
+      "Swift",
+      "unit_",
+      checkDuplicates     = true,
+      includeEqualsInDiff = false,
+      autoCreateTables    = false,
+      exportExcelPath     = None
     )
 
     val dups = DuplicateDetector.detectDuplicatesTable(
@@ -44,7 +47,7 @@ class DuplicateDetectorSpec extends AnyFlatSpec with Matchers with SparkSessionT
     // Sólo debe aparecer id=1 en origen "ref"
     dups.length shouldBe 1
     val d = dups.head
-    d.getAs[String]("origin") shouldBe "ref"
+    d.getAs[String]("origin") shouldBe "dummy.ref"
     d.getAs[String]("id") shouldBe "1"
     d.getAs[String]("occurrences") shouldBe "2"
     d.getAs[String]("exact_duplicates") shouldBe "1"

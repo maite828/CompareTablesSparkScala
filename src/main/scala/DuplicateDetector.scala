@@ -55,9 +55,18 @@ object DuplicateDetector {
   ): DataFrame = {
     import spark.implicits._
 
-    // 1) Unir y etiquetar origen
-    val withSrc = refDf.withColumn("_src", lit("ref"))
-      .unionByName(newDf.withColumn("_src", lit("new")))
+    // 1) Unir y etiquetar origen con nombres de tabla del config
+    val refTableName = config.refSource match {
+      case HiveTable(name, _) => name
+      case FileSource(path, _, _, _) => path
+    }
+    val newTableName = config.newSource match {
+      case HiveTable(name, _) => name
+      case FileSource(path, _, _, _) => path
+    }
+    
+    val withSrc = refDf.withColumn("_src", lit(refTableName))
+      .unionByName(newDf.withColumn("_src", lit(newTableName)))
 
     // 2) Si hay priorityCol, quedarnos con fila ranking = 1
     val base = config.priorityCol match {

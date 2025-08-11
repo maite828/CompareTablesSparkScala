@@ -110,6 +110,10 @@ object SummaryGenerator {
     def idsToStr(df: DataFrame, limit: Int = 6) =
       df.orderBy("cid").limit(limit).as[String].collect().mkString(",")
 
+    // Obtener nombres de tabla del config para las métricas
+    val refTableName = "REF"
+    val newTableName = "NEW"
+
     // Constructor de fila
     def row(b: String, m: String, u: String, num: Long, den: Long, ex: String) =
       SummaryRow(
@@ -124,22 +128,22 @@ object SummaryGenerator {
 
     // Métricas
     val rows = Seq(
-      row("KPIS", "IDs Uniques",           "REF",  nRefIds,     0,   ""          ),
-      row("KPIS", "IDs Uniques",           "NEW",  nNewIds,     0,   ""          ),
+      row("KPIS", "IDs Uniques",           refTableName,  nRefIds,     0,   ""          ),
+      row("KPIS", "IDs Uniques",           newTableName,  nNewIds,     0,   ""          ),
       row("KPIS", "Total REF",             "ROWS", totalRowsRef, 0,   ""          ),
       row("KPIS", "Total NEW",             "ROWS", totalRowsNew, 0,   ""          ),
       row("KPIS", "Total (NEW-REF)",       "ROWS", totalRowsNew - totalRowsRef, totalRowsRef, "" ),
-      row("KPIS", "Quality global",        "REF",  qualityOk,   nRefIds, ""),
+      row("KPIS", "Quality global",        refTableName,  qualityOk,   nRefIds, ""),
 
       row("MATCH",    "1:1 (exact matches)",      "BOTH", idsExact.count(),      nBothIds,     idsToStr(idsExact)),
       row("NO MATCH", "1:1 (match not identical)","BOTH", idsVariations.count(), nBothIds,     idsToStr(idsVariations)),
 
-      row("GAP", "1:0 (only in reference)", "REF",  idsOnlyR.count(), nRefIds, idsToStr(idsOnlyR)),
-      row("GAP", "0:1 (only in new)",       "NEW",  idsOnlyN.count(), nNewIds, idsToStr(idsOnlyN)),
+      row("GAP", "1:0 (only in reference)", refTableName, idsOnlyR.count(), nRefIds, idsToStr(idsOnlyR)),
+      row("GAP", "0:1 (only in new)",       newTableName, idsOnlyN.count(), nNewIds, idsToStr(idsOnlyN)),
 
       row("DUPS", "duplicates (both)", "BOTH", dupIdsBoth.count(),    nBothIds,    idsToStr(dupIdsBoth)),
-      row("DUPS", "duplicates (ref)",  "REF",  dupIdsOnlyRef.count(), nRefIds,     idsToStr(dupIdsOnlyRef)),
-      row("DUPS", "duplicates (new)",  "NEW",  dupIdsOnlyNew.count(), nNewIds,     idsToStr(dupIdsOnlyNew))
+      row("DUPS", "duplicates (ref)",  refTableName, dupIdsOnlyRef.count(), nRefIds,     idsToStr(dupIdsOnlyRef)),
+      row("DUPS", "duplicates (new)",  newTableName, dupIdsOnlyNew.count(), nNewIds,     idsToStr(dupIdsOnlyNew))
     )
 
     spark.createDataset(rows).toDF()

@@ -24,6 +24,9 @@ trait SparkSessionTestWrapper extends BeforeAndAfterAll { self: Suite =>
     .appName("unit-tests")
     .master("local[*]")
     .config("spark.ui.enabled", "false")   // desactiva UI para GitHub Actions
+    .config("spark.sql.catalogImplementation", "hive")  // habilita Hive para tests
+    .config("spark.sql.warehouse.dir", "spark-warehouse")  // directorio de warehouse
+    .enableHiveSupport()  // habilita soporte de Hive
     .getOrCreate()
 
   /** Cierre ordenado tras terminar todos los tests de la Suite. */

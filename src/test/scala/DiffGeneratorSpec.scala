@@ -27,15 +27,18 @@ class DiffGeneratorSpec extends AnyFlatSpec with Matchers with SparkSessionTestW
     val newDf = spark.createDataFrame(spark.sparkContext.parallelize(newData), schema)
 
     val config = CompareConfig(
-      spark            = spark,
-      refTable         = "",
-      newTable         = "",
-      partitionSpec    = None,
-      compositeKeyCols = Seq("id"),
-      ignoreCols       = Seq.empty,
-      initiativeName   = "",
-      tablePrefix      = "",
-      checkDuplicates  = false
+      spark,
+      "dummy.ref",
+      "dummy.new",
+      None,                 // partitionSpec
+      Seq("id"),            // compositeKeyCols
+      Seq.empty,            // ignoreCols
+      "Swift",              // initiativeName
+      "unit_",              // tablePrefix
+      checkDuplicates     = true,
+      includeEqualsInDiff = false,   // <--- FALTABA
+      autoCreateTables    = false,   // <--- FALTABA
+      exportExcelPath     = None     // <--- FALTABA
     )
 
     val diffs = DiffGenerator

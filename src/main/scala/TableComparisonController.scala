@@ -1,32 +1,13 @@
-/**
- * TableComparisonController is the main orchestrator for comparing two tables in Spark.
- * It handles loading, filtering, comparing, and summarizing differences and duplicates between tables.
- *
- * Main workflow:
- *  1. Configures Spark performance settings.
- *  2. Optionally creates output tables for differences, summary, and duplicates.
- *  3. Extracts execution date from partition specification or uses current date.
- *  4. Loads reference and new tables, prunes columns, and persists DataFrames.
- *  5. Generates and writes differences between tables.
- *  6. Optionally detects and writes duplicate records.
- *  7. Generates and writes summary metrics.
- *  8. Optionally exports summary to Excel.
- *  9. Releases cached DataFrames.
- *
- * Helper methods:
- *  - ensureResultTables: Creates output tables if they do not exist.
- *  - loadWithPartition: Loads a table, optionally filtering by partition specification.
- *  - writeResult: Writes results to a table, repartitioned by initiative and execution date.
- *
- * @param config CompareConfig containing Spark session, table names, columns, partition specs, and options.
- */
-// src/main/scala/com/example/compare/TableComparisonController.scala
 
 import java.time.LocalDate
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.sql.types._
+
+// Nuevo: fuentes agnósticas
+
+import CompareConfig._
 
 object TableComparisonController {
 
@@ -60,9 +41,9 @@ object TableComparisonController {
       }
       .getOrElse(LocalDate.now().toString)
 
-    // ── 3) CARGAR TABLAS ORIGEN Y PODAR COLUMNAS ──
-    val rawRef = loadWithPartition(session, refTable, partitionSpec)
-    val rawNew = loadWithPartition(session, newTable, partitionSpec)
+    // ── 3) CARGAR ORÍGENES Y PODAR COLUMNAS ──
+    val rawRef = loadSource(session, refSource, partitionSpec)
+    val rawNew = loadSource(session, newSource, partitionSpec)
 
     // Determinar columnas a comparar
     val partitionKeys = partitionSpec
@@ -74,10 +55,8 @@ object TableComparisonController {
       .filterNot(partitionKeys.contains)
       .filterNot(compositeKeyCols.contains)
 
-    // Solo necesitamos clave + colsToCompare
     val neededCols = compositeKeyCols ++ colsToCompare
 
-    // Reparticiono y persisto para evitar relecturas
     val refDf = rawRef
       .select(neededCols.map(col): _*)
       .repartition(100, compositeKeyCols.map(col): _*)
@@ -88,7 +67,7 @@ object TableComparisonController {
       .repartition(100, compositeKeyCols.map(col): _*)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
-    // ── 4) GENERAR Y ESCRIBIR DIFERENCIAS ──
+    // ── 4) DIFERENCIAS ──
     val diffDf = DiffGenerator.generateDifferencesTable(
       session, refDf, newDf,
       compositeKeyCols, colsToCompare,
@@ -99,7 +78,7 @@ object TableComparisonController {
       initiativeName, executionDate
     )
 
-    // ── 5) GENERAR Y ESCRIBIR DUPLICADOS ──
+    // ── 5) DUPLICADOS ──
     if (checkDuplicates) {
       val dupDf = DuplicateDetector.detectDuplicatesTable(
         session, refDf, newDf, compositeKeyCols, config
@@ -110,7 +89,7 @@ object TableComparisonController {
       )
     }
 
-    // ── 6) GENERAR Y ESCRIBIR RESUMEN ──
+    // ── 6) RESUMEN ──
     val dupRead = if (checkDuplicates)
       session.table(s"${tablePrefix}duplicates").persist(StorageLevel.MEMORY_AND_DISK)
     else
@@ -125,7 +104,7 @@ object TableComparisonController {
       initiativeName, executionDate
     )
 
-    // ── 7) EXPORTAR A EXCEL OPCIONAL ──
+    // ── 7) EXPORT EXCEL ──
     exportExcelPath.foreach(path => SummaryGenerator.exportToExcel(summaryDf, path))
 
     // ── 8) LIBERAR CACHE ──
@@ -139,7 +118,7 @@ object TableComparisonController {
   // -------------------------------------------------------------------
 
   /** Crea las tablas de resultados si no existen */
-   def ensureResultTables(
+  def ensureResultTables(
       spark: SparkSession,
       diffTable: String,
       summaryTable: String,
@@ -186,28 +165,8 @@ object TableComparisonController {
        """.stripMargin)
   }
 
-  /** Carga toda la tabla o filtra por cada clave=valor de partitionSpec */
-   def loadWithPartition(
-      spark: SparkSession,
-      tableName: String,
-      partitionSpec: Option[String]
-  ): DataFrame = {
-    val base = spark.table(tableName)
-    partitionSpec
-      .getOrElse("")
-      .split("/")
-      .foldLeft(base) { (df, kv) =>
-        val parts = kv.split("=", 2)
-        if (parts.length == 2) {
-          val k = parts(0).trim
-          val v = parts(1).replaceAll("\"", "")
-          if (df.columns.contains(k)) df.filter(col(k) === lit(v)) else df
-        } else df
-      }
-  }
-
   /** Inserta el resultado siempre reparticionado por initiative + data_date_part */
-   def writeResult(
+  def writeResult(
       spark: SparkSession,
       tableName: String,
       df: DataFrame,
@@ -220,5 +179,40 @@ object TableComparisonController {
       .repartition(col("initiative"), col("data_date_part"))
       .write.mode(SaveMode.Overwrite)
       .insertInto(tableName)
+  }
+
+  // ───────────────────────────────────────────────────────────────────
+  // NUEVO: carga agnóstica de fuente + filtro por partitionSpec
+  // ───────────────────────────────────────────────────────────────────
+  private def loadSource(
+      spark: SparkSession,
+      source: SourceSpec,
+      partitionSpec: Option[String]
+  ): DataFrame = {
+    val base: DataFrame = source match {
+      case HiveTable(tableName, _) =>
+        spark.table(tableName)
+
+      case FileSource(path, fmt, opts, maybeSchema) =>
+        val reader0 = spark.read.format(fmt).options(opts)
+        val reader  = maybeSchema.map(reader0.schema).getOrElse(reader0)
+        reader.load(path)
+    }
+
+    // Aplica filtros de partición SOLO si las columnas existen
+    val filtered = partitionSpec
+      .map(_.trim).filter(_.nonEmpty)
+      .map(_.split("/").toSeq)
+      .getOrElse(Seq.empty)
+      .foldLeft(base) { (df, kv) =>
+        val parts = kv.split("=", 2)
+        if (parts.length == 2) {
+          val k = parts(0).trim
+          val v = parts(1).replaceAll("^\"|\"$", "")
+          if (df.columns.contains(k)) df.filter(col(k) === lit(v)) else df
+        } else df
+      }
+
+    filtered
   }
 }
