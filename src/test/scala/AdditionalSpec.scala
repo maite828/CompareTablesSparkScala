@@ -29,7 +29,9 @@ class AdditionalSpec extends AnyFlatSpec with Matchers with SparkSessionTestWrap
       checkDuplicates     = false,
       includeEqualsInDiff = false,
       autoCreateTables    = false,
-      exportExcelPath     = None
+      priorityCol         = None,
+      aggOverrides        = Map.empty,
+      exportExcelPath     = None,
     )
 
     val diffs = DiffGenerator.generateDifferencesTable(spark, ref, newDf, Seq("id"), Seq("val"), includeEquals = false, cfg)
@@ -60,8 +62,11 @@ class AdditionalSpec extends AnyFlatSpec with Matchers with SparkSessionTestWrap
       initiativeName   = "t",
       tablePrefix      = "u_",
       checkDuplicates  = true,
+      includeEqualsInDiff = false,
+      autoCreateTables = false,
       priorityCol      = Some("ts"),
-      autoCreateTables = false
+      aggOverrides        = Map.empty,
+      exportExcelPath     = None
     )
 
     val dups = DuplicateDetector.detectDuplicatesTable(spark, refDF, newDF, Seq("id"), cfg)

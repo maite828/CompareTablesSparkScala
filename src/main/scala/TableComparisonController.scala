@@ -18,133 +18,208 @@
  *  - loadWithPartition: Loads a table, optionally filtering by partition specification.
  *  - writeResult: Writes results to a table, repartitioned by initiative and execution date.
  *
- * @param config CompareConfig containing Spark session, table names, columns, partition specs, and options.
+ * CompareConfig containing Spark session, table names, columns, partition specs, and options.
  */
-// src/main/scala/com/example/compare/TableComparisonController.scala
 
 import java.time.LocalDate
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.sql.types._
 
 object TableComparisonController {
+
+  /** Minimal holder for the two aligned DataFrames under comparison. */
+  private final case class Frames(ref: DataFrame, neu: DataFrame)
+
+  /** Minimal holder for summary dependencies to avoid >8 params. */
+  private final case class SummaryDeps(
+                                        diff: DataFrame,
+                                        dups: DataFrame,
+                                        rawRef: DataFrame,
+                                        rawNew: DataFrame
+                                      )
+
+  // --------------------------------------------------------------------------------------
 
   def run(config: CompareConfig): Unit = {
     import config._
     val session = spark
 
-    // ── 0) CONFIGURACIÓN DE RENDIMIENTO ──
+    configurePerformance(session)
+    if (autoCreateTables) ensureResultTables(session, s"$tablePrefix" + "differences", s"$tablePrefix" + "summary", s"$tablePrefix" + "duplicates")
+
+    val executionDate = extractExecutionDate(partitionSpec)
+    val prep = loadAndPrepare(session, refTable, newTable, partitionSpec, compositeKeyCols, ignoreCols)
+
+    val diffDf = computeDifferences(session, prep.refDf, prep.newDf, compositeKeyCols, prep.colsToCompare, includeEqualsInDiff, config)
+    writeResult(s"${tablePrefix}differences", diffDf, Seq("id","column","value_ref","value_new","results"), initiativeName, executionDate)
+
+    val dupRead = handleDuplicates(session, checkDuplicates, tablePrefix, compositeKeyCols, prep.refDf, prep.newDf, config)
+
+    // --- CHANGED: build holders and call the new computeSummary (<= 8 params) -----------
+    val frames = Frames(prep.refDf, prep.newDf)
+    val deps   = SummaryDeps(diffDf, dupRead, prep.rawRef, prep.rawNew)
+
+    val summaryDf = computeSummary(frames, deps, config)
+    // ------------------------------------------------------------------------------------
+
+    writeResult(
+      s"${tablePrefix}summary", summaryDf, Seq("bloque","metrica","universo","numerador","denominador","pct","ejemplos"),
+      initiativeName, executionDate)
+
+    exportExcelPath.foreach(path => SummaryGenerator.exportToExcel(summaryDf, path))
+
+    prep.refDf.unpersist(); prep.newDf.unpersist()
+    if (checkDuplicates) dupRead.unpersist()
+    diffDf.unpersist(); summaryDf.unpersist()
+  }
+
+  // ─────────────────────────── Helpers de orquestación (sin cambiar semántica) ───────────────────────────
+
+  /** Keep the original performance settings exactly the same. */
+  private def configurePerformance(session: SparkSession): Unit = {
     session.conf.set("spark.sql.shuffle.partitions", "100")
     session.sparkContext.setCheckpointDir("/tmp/checkpoints")
     session.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
     session.conf.set("hive.exec.dynamic.partition", "true")
     session.conf.set("hive.exec.dynamic.partition.mode", "nonstrict")
+  }
 
-    // ── 1) CREAR TABLAS DE SALIDA SI ES NECESARIO ──
-    if (autoCreateTables) {
-      val diffTable       = s"$tablePrefix" + "differences"
-      val summaryTable    = s"$tablePrefix" + "summary"
-      val duplicatesTable = s"$tablePrefix" + "duplicates"
-      ensureResultTables(session, diffTable, summaryTable, duplicatesTable)
-    }
-
-    // ── 2) EXTRAER FECHA DE EJECUCIÓN ──
+  /** Extract execution date from the same regex rules as before. */
+  private def extractExecutionDate(partitionSpec: Option[String]): String = {
     val isoRegex    = "[A-Za-z0-9_]+\\s*=\\s*\"([0-9]{4}-[0-9]{2}-[0-9]{2})\"".r
     val tripleRegex = "[A-Za-z0-9_]+\\s*=\\s*\"([0-9]{2})\"\\s*/\\s*[A-Za-z0-9_]+\\s*=\\s*\"([0-9]{2})\"\\s*/\\s*[A-Za-z0-9_]+\\s*=\\s*\"([0-9]{4})\"".r
-
-    val executionDate: String = partitionSpec
+    partitionSpec
       .flatMap { spec =>
         isoRegex.findFirstMatchIn(spec).map(_.group(1))
           .orElse(tripleRegex.findFirstMatchIn(spec).map(m => s"${m.group(3)}-${m.group(2)}-${m.group(1)}"))
       }
       .getOrElse(LocalDate.now().toString)
+  }
 
-    // ── 3) CARGAR TABLAS ORIGEN Y PODAR COLUMNAS ──
-    val rawRef = loadWithPartition(session, refTable, partitionSpec)
-    val rawNew = loadWithPartition(session, newTable, partitionSpec)
+  private final case class Prep(
+                                 rawRef: DataFrame,
+                                 rawNew: DataFrame,
+                                 refDf: DataFrame,
+                                 newDf: DataFrame,
+                                 colsToCompare: Seq[String]
+                               )
 
-    // Determinar columnas a comparar
-    val partitionKeys = partitionSpec
-      .map(_.split("/").map(_.split("=")(0).trim).toSet)
-      .getOrElse(Set.empty[String])
+  /** Load tables, derive colsToCompare, select needed columns, repartition and persist exactly like before. */
+  private def loadAndPrepare(
+                              spark: SparkSession,
+                              refTable: String,
+                              newTable: String,
+                              partitionSpec: Option[String],
+                              compositeKeyCols: Seq[String],
+                              ignoreCols: Seq[String]
+                            ): Prep = {
+    val rawRef = loadWithPartition(spark, refTable, partitionSpec)
+    val rawNew = loadWithPartition(spark, newTable, partitionSpec)
+
+    val partitionKeys = partitionSpec.map(_.split("/").map(_.split("=")(0).trim).toSet).getOrElse(Set.empty[String])
 
     val colsToCompare = rawRef.columns.toSeq
       .filterNot(ignoreCols.contains)
       .filterNot(partitionKeys.contains)
       .filterNot(compositeKeyCols.contains)
 
-    // Solo necesitamos clave + colsToCompare
     val neededCols = compositeKeyCols ++ colsToCompare
 
-    // Reparticiono y persisto para evitar relecturas
-    val refDf = rawRef
-      .select(neededCols.map(col): _*)
-      .repartition(100, compositeKeyCols.map(col): _*)
+    val refDf = rawRef.select(neededCols.map(col): _*).repartition(100, compositeKeyCols.map(col): _*)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
-    val newDf = rawNew
-      .select(neededCols.map(col): _*)
-      .repartition(100, compositeKeyCols.map(col): _*)
+    val newDf = rawNew.select(neededCols.map(col): _*).repartition(100, compositeKeyCols.map(col): _*)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
-    // ── 4) GENERAR Y ESCRIBIR DIFERENCIAS ──
-    val diffDf = DiffGenerator.generateDifferencesTable(
-      session, refDf, newDf,
+    Prep(rawRef, rawNew, refDf, newDf, colsToCompare)
+  }
+
+  /** Duplicate stage handling with identical semantics: compute+write, then read table and persist. */
+  private def handleDuplicates(
+                                spark: SparkSession,
+                                enabled: Boolean,
+                                tablePrefix: String,
+                                compositeKeyCols: Seq[String],
+                                refDf: DataFrame,
+                                newDf: DataFrame,
+                                config: CompareConfig
+                              ): DataFrame = {
+    if (!enabled) spark.emptyDataFrame
+    else {
+      val dupDf = computeDuplicates(spark, refDf, newDf, compositeKeyCols, config)
+      writeResult(s"${tablePrefix}duplicates", dupDf,
+        Seq("origin","id","exact_duplicates","dups_w_variations","occurrences","variations"),
+        config.initiativeName, extractExecutionDate(config.partitionSpec)
+      )
+      spark.table(s"${tablePrefix}duplicates").persist(StorageLevel.MEMORY_AND_DISK)
+    }
+  }
+
+  // ─────────────────────────── Helpers de cálculo (idéntico a antes) ───────────────────────────
+
+  /** Compute differences exactly as before and persist it to avoid recomputation downstream. */
+  private def computeDifferences(
+                                  spark: SparkSession,
+                                  refDf: DataFrame,
+                                  newDf: DataFrame,
+                                  compositeKeyCols: Seq[String],
+                                  colsToCompare: Seq[String],
+                                  includeEqualsInDiff: Boolean,
+                                  config: CompareConfig,
+                                  persistLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK
+                                ): DataFrame = {
+    val df = DiffGenerator.generateDifferencesTable(
+      spark, refDf, newDf,
       compositeKeyCols, colsToCompare,
       includeEqualsInDiff, config
     )
-    writeResult(session, s"${tablePrefix}differences", diffDf,
-      Seq("id","column","value_ref","value_new","results"),
-      initiativeName, executionDate
-    )
-
-    // ── 5) GENERAR Y ESCRIBIR DUPLICADOS ──
-    if (checkDuplicates) {
-      val dupDf = DuplicateDetector.detectDuplicatesTable(
-        session, refDf, newDf, compositeKeyCols, config
-      )
-      writeResult(session, s"${tablePrefix}duplicates", dupDf,
-        Seq("origin","id","exact_duplicates","dups_w_variations","occurrences","variations"),
-        initiativeName, executionDate
-      )
-    }
-
-    // ── 6) GENERAR Y ESCRIBIR RESUMEN ──
-    val dupRead = if (checkDuplicates)
-      session.table(s"${tablePrefix}duplicates").persist(StorageLevel.MEMORY_AND_DISK)
-    else
-      session.emptyDataFrame
-
-    val summaryDf = SummaryGenerator.generateSummaryTable(
-      session, refDf, newDf, diffDf, dupRead,
-      compositeKeyCols, rawRef, rawNew, config
-    )
-    writeResult(session, s"${tablePrefix}summary", summaryDf,
-      Seq("bloque","metrica","universo","numerador","denominador","pct","ejemplos"),
-      initiativeName, executionDate
-    )
-
-    // ── 7) EXPORTAR A EXCEL OPCIONAL ──
-    exportExcelPath.foreach(path => SummaryGenerator.exportToExcel(summaryDf, path))
-
-    // ── 8) LIBERAR CACHE ──
-    refDf.unpersist()
-    newDf.unpersist()
-    if (checkDuplicates) dupRead.unpersist()
+    df.persist(persistLevel)
   }
 
-  // -------------------------------------------------------------------
-  // Helpers
-  // -------------------------------------------------------------------
+  /** Compute duplicates exactly as before and persist it to avoid recomputation downstream. */
+  private def computeDuplicates(
+                                 spark: SparkSession,
+                                 refDf: DataFrame,
+                                 newDf: DataFrame,
+                                 compositeKeyCols: Seq[String],
+                                 config: CompareConfig,
+                                 persistLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK
+                               ): DataFrame = {
+    val df = DuplicateDetector.detectDuplicatesTable(
+      spark, refDf, newDf, compositeKeyCols, config
+    )
+    df.persist(persistLevel)
+  }
 
-  /** Crea las tablas de resultados si no existen */
-   def ensureResultTables(
-      spark: SparkSession,
-      diffTable: String,
-      summaryTable: String,
-      duplicatesTable: String
-  ): Unit = {
+  /** Compute summary with identical semantics*/
+  private def computeSummary(
+                              frames: Frames,
+                              deps: SummaryDeps,
+                              config: CompareConfig
+                            ): DataFrame = {
+    // Use spark/compositeKeyCols from config to avoid passing them as parameters.
+    val spark = config.spark
+    val df = SummaryGenerator.generateSummaryTable(
+      spark,
+      frames.ref, frames.neu,
+      deps.diff, deps.dups,
+      config.compositeKeyCols,
+      deps.rawRef, deps.rawNew,
+      config
+    )
+    // Keep the same persistence behavior as before.
+    df.persist(StorageLevel.MEMORY_AND_DISK)
+  }
+
+  // ─────────────────────────── Helpers existentes (sin cambios) ───────────────────────────
+
+  private def ensureResultTables(
+                                  spark: SparkSession,
+                                  diffTable: String,
+                                  summaryTable: String,
+                                  duplicatesTable: String
+                                ): Unit = {
     spark.sql(
       s"""
          |CREATE TABLE IF NOT EXISTS $diffTable (
@@ -186,15 +261,13 @@ object TableComparisonController {
        """.stripMargin)
   }
 
-  /** Carga toda la tabla o filtra por cada clave=valor de partitionSpec */
-   def loadWithPartition(
-      spark: SparkSession,
-      tableName: String,
-      partitionSpec: Option[String]
-  ): DataFrame = {
+  private def loadWithPartition(
+                                 spark: SparkSession,
+                                 tableName: String,
+                                 partitionSpec: Option[String]
+                               ): DataFrame = {
     val base = spark.table(tableName)
-    partitionSpec
-      .getOrElse("")
+    partitionSpec.getOrElse("")
       .split("/")
       .foldLeft(base) { (df, kv) =>
         val parts = kv.split("=", 2)
@@ -206,16 +279,15 @@ object TableComparisonController {
       }
   }
 
-  /** Inserta el resultado siempre reparticionado por initiative + data_date_part */
-   def writeResult(
-      spark: SparkSession,
-      tableName: String,
-      df: DataFrame,
-      columns: Seq[String],
-      initiative: String,
-      executionDate: String
-  ): Unit = {
-    df.withColumn("initiative", lit(initiative))
+  private def writeResult(
+                           tableName: String,
+                           df: DataFrame,
+                           columns: Seq[String],
+                           initiative: String,
+                           executionDate: String
+                         ): Unit = {
+    df.select(columns.map(col): _*)
+      .withColumn("initiative", lit(initiative))
       .withColumn("data_date_part", lit(executionDate))
       .repartition(col("initiative"), col("data_date_part"))
       .write.mode(SaveMode.Overwrite)

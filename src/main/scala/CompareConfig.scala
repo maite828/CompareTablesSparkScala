@@ -21,15 +21,14 @@ case class CompareConfig(
   initiativeName: String,
   tablePrefix: String,
   checkDuplicates: Boolean,
-  includeEqualsInDiff: Boolean = true,
+  includeEqualsInDiff: Boolean,
   autoCreateTables: Boolean  = true,
   nullKeyMatches: Boolean    = true,
-  includeDupInQuality: Boolean = false,
+  includeDupInQuality: Boolean = true,
   priorityCol: Option[String]   = None,
   aggOverrides: Map[String, AggType] = Map.empty,
-  //exportExcelPath: Option[String] = Some("file:/Users/maite828/CompareTablesSparkScala/output/summary.xlsx")
   exportExcelPath: Option[String] = None
-    //exportExcelPath: Option[String] = Some("s3a://mi-bucket/resultados/summary.xlsx")
-
+  // exportExcelPath: Option[String] = Some("file:/.../summary.xlsx")
+  // exportExcelPath: Option[String] = Some("s3a://mi-bucket/results/summary.xlsx")
 
 )

@@ -34,7 +34,8 @@ class DuplicateDetectorSpec extends AnyFlatSpec with Matchers with SparkSessionT
       ignoreCols       = Seq.empty,
       initiativeName   = "",
       tablePrefix      = "",
-      checkDuplicates  = true
+      checkDuplicates  = true,
+      includeEqualsInDiff = true
     )
 
     val dups = DuplicateDetector.detectDuplicatesTable(

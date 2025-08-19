@@ -35,7 +35,9 @@ class DiffGeneratorSpec extends AnyFlatSpec with Matchers with SparkSessionTestW
       ignoreCols       = Seq.empty,
       initiativeName   = "",
       tablePrefix      = "",
-      checkDuplicates  = false
+      checkDuplicates  = false,
+      includeEqualsInDiff = true,
+      autoCreateTables = false,
     )
 
     val diffs = DiffGenerator
