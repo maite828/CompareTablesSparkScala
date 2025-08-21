@@ -1,3 +1,6 @@
+// src/main/scala/PartitionFormatTool.scala
+// (no package to match your current project layout)
+
 import com.fasterxml.jackson.databind.node.{ArrayNode, ObjectNode, TextNode}
 import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
 import java.time.LocalDate
@@ -10,6 +13,7 @@ object PartitionFormatTool {
 
   // Jackson mapper reused across methods
   private val mapper = new ObjectMapper()
+
   // Date formatters
   private val ISO = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.ROOT)
   private val DMY = DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.ROOT)
@@ -20,38 +24,38 @@ object PartitionFormatTool {
 
   /** Replace date tokens and date-like substrings in a string, keeping the original format. */
   private def replaceDateInString(s: String, execDate: LocalDate): String = {
-    // Reemplazo de tokens primero (extender si es necesario)
+    // 1) Token replacements first (extend if needed)
     val withTokens = s
       .replace("$dataDatePart", execDate.format(ISO))
       .replace("$EXEC_DATE",    execDate.format(ISO))
       .replace("${EXEC_DATE}",  execDate.format(ISO))
       .replace("{{ds}}",        execDate.format(ISO))
+      .replace("{{ ds }}",      execDate.format(ISO))
+      .replace("{{ds_nodash}}", execDate.format(DateTimeFormatter.ofPattern("yyyyMMdd")))
+      .replace("{{ ds_nodash }}", execDate.format(DateTimeFormatter.ofPattern("yyyyMMdd")))
+      // 👇 añade estos dos para plantillas literales de Airflow que has mostrado
+      .replace("YYYY-MM-dd",    execDate.format(ISO))
+      .replace("dd/MM/YYYY",    execDate.format(DMY))
 
-    // Función helper para validar y parsear fechas
-    def isValidDate(dateStr: String, formatter: DateTimeFormatter): Boolean = {
-      try {
-        LocalDate.parse(dateStr, formatter)
-        true
-      } catch {
-        case _: Exception => false
-      }
-    }
+    // 2) Helper to validate a date string with a given formatter
+    def isValidDate(dateStr: String, formatter: DateTimeFormatter): Boolean =
+      try { LocalDate.parse(dateStr, formatter); true } catch { case _: Exception => false }
 
-    // Reemplazar solo fechas ISO válidas
-    val isoRegex = raw"\b([0-9]{4}-[0-9]{2}-[0-9]{2})\b".r
-    val afterIso = isoRegex.replaceAllIn(withTokens, m => {
+    // 3) Replace only valid ISO yyyy-MM-dd matches
+    val isoRegex  = raw"\b([0-9]{4}-[0-9]{2}-[0-9]{2})\b".r
+    val afterIso  = isoRegex.replaceAllIn(withTokens, m => {
       val dateStr = m.group(1)
       if (isValidDate(dateStr, ISO)) execDate.format(ISO) else dateStr
     })
 
-    // Reemplazar solo fechas DMY válidas
-    val dmyRegex = raw"\b([0-9]{2})/([0-9]{2})/([0-9]{4})\b".r
-    val result = dmyRegex.replaceAllIn(afterIso, m => {
+    // 4) Replace only valid DMY dd/MM/yyyy matches (preserve DMY format)
+    val dmyRegex  = raw"\b([0-9]{2})/([0-9]{2})/([0-9]{4})\b".r
+    val afterDmy  = dmyRegex.replaceAllIn(afterIso, m => {
       val dateStr = m.group(0)
       if (isValidDate(dateStr, DMY)) execDate.format(DMY) else dateStr
     })
 
-    result
+    afterDmy
   }
 
   /** Deeply rewrite any string fields in the JSON tree, injecting execution date where appropriate. */
@@ -76,12 +80,16 @@ object PartitionFormatTool {
     case other => other // numbers, booleans, null
   }
 
+  /** Escape double quotes to keep a valid key="value" partitionSpec. */
+  private def escapeQuotes(s: String): String =
+    s.replace("\"", "\\\"")
+
   /** Build a partitionSpec string from an object node: key="val"/key2="val2". */
   private def partitionsNodeToSpec(node: JsonNode): String = {
     val it = node.fields().asScala.toSeq // preserve insertion order
     it.map { e =>
       val k = e.getKey
-      val v = e.getValue.asText()
+      val v = escapeQuotes(e.getValue.asText())
       s"""$k="$v""""
     }.mkString("/")
   }
@@ -104,7 +112,7 @@ object PartitionFormatTool {
    *  - Returns (normalizedParams, normalizedPartitionSpec).
    */
   def normalizeParameters(paramsNode: JsonNode, executionDateISO: String): (JsonNode, Option[String]) = {
-    val execDate = LocalDate.parse(executionDateISO, ISO)
+    val execDate   = LocalDate.parse(executionDateISO, ISO)
     val normalized = rewriteDatesDeep(paramsNode, execDate)
     val finalSpec  = computePartitionSpec(normalized)
     (normalized, finalSpec)
@@ -121,22 +129,22 @@ object PartitionFormatTool {
    */
   def extractDateFromPartitionSpec(partitionSpec: Option[String]): String = {
     def fromTripleTokens(tokens: List[String]): Option[String] = {
-      // tokens: preserve order of appearance; pick first 4-digit year in [1900,2100]
-      val (years, rest) = tokens.partition(_.length == 4)
-      val yearOpt = years
-        .map(_.toInt)
-        .find(y => y >= 1900 && y <= 2100)
-        .orElse(years.headOption.map(_.toInt)) // fallback to any 4-digit
+      // Keep order of appearance; pick a 4-digit year in [1900,2100] if present
+      val (four, rest) = tokens.partition(_.length == 4)
+      val yearOpt = four.map(_.toInt).find(y => y >= 1900 && y <= 2100)
+        .orElse(four.headOption.map(_.toInt))
       val twos = rest.filter(_.length == 2).map(_.toInt)
+
       (yearOpt, twos) match {
         case (Some(y), m1 :: d1 :: _) =>
           def fmt(y: Int, m: Int, d: Int): Option[String] =
             if (m >= 1 && m <= 12 && d >= 1 && d <= 31) Some(f"$y-$m%02d-$d%02d") else None
-          // try month=m1, day=d1; then swap if invalid
+          // Try month=m1/day=d1, then swap if invalid
           fmt(y, m1, d1).orElse(fmt(y, d1, m1))
         case _ => None
       }
     }
+
     partitionSpec.flatMap { spec =>
       // 1) ISO quoted key="yyyy-MM-dd"
       val isoQuoted = """[A-Za-z0-9_]+\s*=\s*"([0-9]{4}-[0-9]{2}-[0-9]{2})"""".r
@@ -153,10 +161,11 @@ object PartitionFormatTool {
       // 5) Three quoted numeric tokens (2/4 digits) separated by '/', in any order
       val quotedNums = """=\s*"([0-9]{2,4})"""".r.findAllMatchIn(spec).map(_.group(1)).toList
       val tripleGenericQuoted = if (quotedNums.size >= 3) fromTripleTokens(quotedNums) else None
-      // 6) Fallback: three numeric tokens (2/4 digits) anywhere, keep first 3 distinct
+      // 6) Fallback: three numeric tokens (2/4 digits) anywhere (first 3 distinct)
       val bareNums = """\b([0-9]{2,4})\b""".r.findAllMatchIn(spec).map(_.group(1)).toList
       val merged   = (quotedNums ++ bareNums).distinct.take(3)
       val tripleGenericBare = if (merged.size == 3) fromTripleTokens(merged) else None
+
       isoQuoted
         .orElse(isoBare)
         .orElse(dmyQuoted)
