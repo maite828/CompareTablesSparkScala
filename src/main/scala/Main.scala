@@ -113,7 +113,7 @@ object Main {
       .getOrElse(throw new IllegalArgumentException("""Missing "executionDate" in parameters"""))
 
     // Normalize parameters (deep date/token replacement) and compute final partitionSpec
-    val (params, partitionSpecOpt) = PartitionSpecUtils.normalizeParameters(params0, executionDateISO)
+    val (params, partitionSpecOpt) = PartitionFormatTool.normalizeParameters(params0, executionDateISO)
 
     // Read the rest of fields from normalized params
     val refTable = reqText(params, "refTable")
@@ -141,7 +141,7 @@ object Main {
 
     TableComparisonController.run(cfg)
     // Use normalized partitionSpec to derive date for result filtering
-    val execDateForFilter = PartitionSpecUtils.extractDateFromPartitionSpec(partitionSpecOpt)
+    val execDateForFilter = PartitionFormatTool.extractDateFromPartitionSpec(partitionSpecOpt)
 
 
     // 5) Mostrar resultados (TableComparatorApp ya los muestra, pero dejamos confirmación aquí)

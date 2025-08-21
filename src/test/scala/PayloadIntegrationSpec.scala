@@ -26,7 +26,7 @@ class PayloadIntegrationSpec extends AnyFunSuite with Matchers {
     val root   = mapper.readTree(payloadJson)
     val params = root.get("parameters")
     val (normalized, specOpt) =
-      PartitionSpecUtils.normalizeParameters(params, executionDateISO = "2025-08-14")
+      PartitionFormatTool.normalizeParameters(params, executionDateISO = "2025-08-14")
     specOpt shouldBe Some("""region="ES"/ds="2025-08-14"""")
     normalized.get("tablePrefix").asText() shouldBe "default.result_"
   }

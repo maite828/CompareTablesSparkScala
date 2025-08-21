@@ -5,8 +5,8 @@ import org.scalatest.OptionValues.convertOptionToValuable
 
 import scala.collection.JavaConverters._
 
-/** Tests for PartitionSpecUtils focusing on agnostic date injection and partitionSpec normalization. */
-class PartitionSpecUtilsSpec extends AnyFunSuite with Matchers {
+/** Tests for PartitionFormatTool focusing on agnostic date injection and partitionSpec normalization. */
+class PartitionFormatToolSpec extends AnyFunSuite with Matchers {
 
   private val mapper = new ObjectMapper()
   private def J(s: String): JsonNode = mapper.readTree(s)
@@ -26,7 +26,7 @@ class PartitionSpecUtilsSpec extends AnyFunSuite with Matchers {
       """.stripMargin
 
     val (normalized, specOpt) =
-      PartitionSpecUtils.normalizeParameters(J(params), "2025-08-14")
+      PartitionFormatTool.normalizeParameters(J(params), "2025-08-14")
     specOpt shouldBe Some("""date="2025-08-14"/geo="ES"""")
     normalized.get("partitionSpec").asText() should include ("2025-08-14")
   }
@@ -43,7 +43,7 @@ class PartitionSpecUtilsSpec extends AnyFunSuite with Matchers {
         |}
       """.stripMargin
     val (normalized, specOpt) =
-      PartitionSpecUtils.normalizeParameters(J(params), "2025-08-14")
+      PartitionFormatTool.normalizeParameters(J(params), "2025-08-14")
     specOpt shouldBe Some("""fecha="14/08/2025"/country="ES"""")
   }
   test("normalizeParameters should build partitionSpec from partitions object (order-preserving)") {
@@ -58,7 +58,7 @@ class PartitionSpecUtilsSpec extends AnyFunSuite with Matchers {
         |}
       """.stripMargin
     val (normalized, specOpt) =
-      PartitionSpecUtils.normalizeParameters(J(params), "2025-08-14")
+      PartitionFormatTool.normalizeParameters(J(params), "2025-08-14")
     // Order should be as inserted: layer/ds/region
     specOpt shouldBe Some("""layer="silver"/ds="2025-08-14"/region="ES"""")
     normalized.get("partitions").get("ds").asText() shouldBe "2025-08-14"
@@ -80,7 +80,7 @@ class PartitionSpecUtilsSpec extends AnyFunSuite with Matchers {
         |}
       """.stripMargin
     val (normalized, specOpt) =
-      PartitionSpecUtils.normalizeParameters(J(params), "2025-08-14")
+      PartitionFormatTool.normalizeParameters(J(params), "2025-08-14")
     // partitionSpec from partitions, with dt replaced
     specOpt shouldBe Some("""dt="2025-08-14"""")
     normalized.get("extra").get("notes").asText() shouldBe "run for 2025-08-14"
@@ -102,27 +102,29 @@ class PartitionSpecUtilsSpec extends AnyFunSuite with Matchers {
         |}
       """.stripMargin
     val (normalized, specOpt) =
-      PartitionSpecUtils.normalizeParameters(J(params), "2025-08-14")
+      PartitionFormatTool.normalizeParameters(J(params), "2025-08-14")
     specOpt shouldBe Some("""d="2025-08-14"/r="EU"""")
   }
 
   test("extractDateFromPartitionSpec should capture ISO or dd/MM/yyyy regardless of key names") {
     val iso  = Some("""foo="x"/any_key="2025-08-14"/bar="y"""")
+    val iso2 = Some("""geo=BJG/data_date_part=2020-12-01/""")
     val dmy  = Some("""dia="14/08/2025"/otro="zz"""")
     val none = Some("""no_date_here="x"/still="y"""")
     val sep1 = Some("""no_date_here="2025"/still="08"/and_year="14"""") // separate day/month/year
     val sep2 = Some("""still="08"/no_date_here="2025"/and_year="14"""") // separate day/year/month
 
     val nullv: Option[String] = None
-    PartitionSpecUtils.extractDateFromPartitionSpec(iso) shouldBe "2025-08-14"
-    PartitionSpecUtils.extractDateFromPartitionSpec(dmy) shouldBe "2025-08-14"  // DMY converted to ISO
+    PartitionFormatTool.extractDateFromPartitionSpec(iso) shouldBe "2025-08-14"
+    PartitionFormatTool.extractDateFromPartitionSpec(iso2) shouldBe "2020-12-01"
+    PartitionFormatTool.extractDateFromPartitionSpec(dmy) shouldBe "2025-08-14"  // DMY converted to ISO
     // When no date found, it returns "today" in ISO; we just assert it matches yyyy-MM-dd
-    val today = PartitionSpecUtils.extractDateFromPartitionSpec(none)
+    val today = PartitionFormatTool.extractDateFromPartitionSpec(none)
     today should fullyMatch regex """\d{4}-\d{2}-\d{2}"""
-    PartitionSpecUtils.extractDateFromPartitionSpec(nullv) should fullyMatch regex """\d{4}-\d{2}-\d{2}"""
+    PartitionFormatTool.extractDateFromPartitionSpec(nullv) should fullyMatch regex """\d{4}-\d{2}-\d{2}"""
     // Test nuevo
-    PartitionSpecUtils.extractDateFromPartitionSpec(sep1) shouldBe "2025-08-14"
-    PartitionSpecUtils.extractDateFromPartitionSpec(sep2) shouldBe "2025-08-14"
+    PartitionFormatTool.extractDateFromPartitionSpec(sep1) shouldBe "2025-08-14"
+    PartitionFormatTool.extractDateFromPartitionSpec(sep2) shouldBe "2025-08-14"
 
   }
 
@@ -140,26 +142,26 @@ class PartitionSpecUtilsSpec extends AnyFunSuite with Matchers {
         |}
       """.stripMargin
     val (normalized, specOpt) =
-      PartitionSpecUtils.normalizeParameters(J(params), "2025-08-14")
+      PartitionFormatTool.normalizeParameters(J(params), "2025-08-14")
     specOpt shouldBe None
     normalized.get("checkDuplicates").asBoolean() shouldBe true
     normalized.get("includeEqualsInDiff").asBoolean() shouldBe false
     normalized.get("numeric").asInt() shouldBe 123
   }
 
-  // Añade estos casos a src/test/scala/.../PartitionSpecUtilsSpec.scala
+  // Añado estos casos a src/test/scala/.../PartitionFormatToolSpec.scala
 
   test("parseJson should parse valid JSON and fail on invalid JSON") {
     val good = """{ "a": 1, "b": "x" }"""
     val bad  = """{ "a": 1, "b": }"""
 
-    val node = PartitionSpecUtils.parseJson(good)
+    val node = PartitionFormatTool.parseJson(good)
     node.get("a").asInt() shouldBe 1
     node.get("b").asText() shouldBe "x"
 
     // Para invalid JSON esperamos excepción del parser
     assertThrows[com.fasterxml.jackson.core.JsonParseException] {
-      PartitionSpecUtils.parseJson(bad)
+      PartitionFormatTool.parseJson(bad)
     }
   }
 
@@ -172,7 +174,7 @@ class PartitionSpecUtilsSpec extends AnyFunSuite with Matchers {
         |}
     """.stripMargin
 
-    val (norm, specOpt) = PartitionSpecUtils.normalizeParameters(J(params), "2025-08-14")
+    val (norm, specOpt) = PartitionFormatTool.normalizeParameters(J(params), "2025-08-14")
     specOpt.value shouldBe """d1="2025-08-14"/d2="2025-08-14"/d3="2025-08-14"/d4="2025-08-14""""
     norm.get("extra").asText() shouldBe "inside text: date=2025-08-14 and also 2025-08-14"
   }
@@ -186,7 +188,7 @@ class PartitionSpecUtilsSpec extends AnyFunSuite with Matchers {
         |}
     """.stripMargin
 
-    val (norm, _) = PartitionSpecUtils.normalizeParameters(J(params), "2025-08-14")
+    val (norm, _) = PartitionFormatTool.normalizeParameters(J(params), "2025-08-14")
     norm.get("notes").asText() shouldBe "A: 2025-08-14 | B: 14/08/2025 | C end"
   }
 
@@ -199,7 +201,7 @@ class PartitionSpecUtilsSpec extends AnyFunSuite with Matchers {
         |}
     """.stripMargin
 
-    val (norm, _) = PartitionSpecUtils.normalizeParameters(J(params), "2025-08-14")
+    val (norm, _) = PartitionFormatTool.normalizeParameters(J(params), "2025-08-14")
     // "2024-01-01x" no casa con el patrón completo yyyy-MM-dd por la 'x' final, así que no se reemplaza
     norm.get("text").asText() shouldBe "ref-2024-01-01x not_a_date 99/99/9999"
   }
@@ -213,7 +215,7 @@ class PartitionSpecUtilsSpec extends AnyFunSuite with Matchers {
         |}
     """.stripMargin
 
-    val (norm, _) = PartitionSpecUtils.normalizeParameters(J(params), "2025-08-14")
+    val (norm, _) = PartitionFormatTool.normalizeParameters(J(params), "2025-08-14")
     norm.get("text").asText() shouldBe "two dates: 2025-08-14 and 14/08/2025 and again 2025-08-14"
   }
 
@@ -228,7 +230,7 @@ class PartitionSpecUtilsSpec extends AnyFunSuite with Matchers {
         |}
     """.stripMargin
 
-    val (norm, _) = PartitionSpecUtils.normalizeParameters(J(params), "2025-08-14")
+    val (norm, _) = PartitionFormatTool.normalizeParameters(J(params), "2025-08-14")
     val arr = norm.get("arr")
     arr.get(0).asText() shouldBe "on 2025-08-14"
     arr.get(1).asInt()  shouldBe 123

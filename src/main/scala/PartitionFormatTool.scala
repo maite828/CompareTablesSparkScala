@@ -6,7 +6,7 @@ import java.util.Locale
 import scala.collection.JavaConverters._
 
 /** Utilities to normalize partition specs and inject execution dates in a fully agnostic way. */
-object PartitionSpecUtils {
+object PartitionFormatTool {
 
   // Jackson mapper reused across methods
   private val mapper = new ObjectMapper()
