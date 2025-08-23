@@ -1,61 +1,66 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "🚀 Ejecutando comparación de tablas con Spark + Hive"
+echo "🚀 Ejecutando comparación de tablas (local, Spark 3.5.x + Hive)"
 
-# ───────────────────────────────────────────────────────────────────────────────
-# 0) Resolución de JAVA_HOME en macOS (Spark 3.5.0 requiere JDK 8/11/17; evita Java 24)
-# ───────────────────────────────────────────────────────────────────────────────
-SBT_JAVA_HOME_ARGS=()
-
+# Java 17 o 11 en macOS
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  # Intenta localizar un JDK 17 instalado en macOS
   if JAVA_17_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null)"; then
     export JAVA_HOME="$JAVA_17_HOME"
-    export PATH="$JAVA_HOME/bin:$PATH"
-    echo "🔧 macOS: usando JDK 17 en JAVA_HOME: $JAVA_HOME"
-    SBT_JAVA_HOME_ARGS=( -java-home "$JAVA_HOME" )
-  else
-    # Ruta típica si instalaste Temurin 17 con Homebrew (cask)
-    CASK_HOME="/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home"
-    if [[ -d "$CASK_HOME" ]]; then
-      export JAVA_HOME="$CASK_HOME"
-      export PATH="$JAVA_HOME/bin:$PATH"
-      echo "🔧 macOS: usando JDK 17 (Temurin) en JAVA_HOME: $JAVA_HOME"
-      SBT_JAVA_HOME_ARGS=( -java-home "$JAVA_HOME" )
-    else
-      echo "🛑 macOS: No se encontró JDK 17."
-      echo "    Instálalo con Homebrew:  brew install --cask temurin@17"
-      echo "    O instala Temurin 17 desde Adoptium y reintenta."
-      exit 1
-    fi
+  elif JAVA_11_HOME="$(/usr/libexec/java_home -v 11 2>/dev/null)"; then
+    export JAVA_HOME="$JAVA_11_HOME"
   fi
-
-  # (Opcional) Definir HADOOP_HOME dummy para silenciar warnings inofensivos
-  export HADOOP_HOME="${HADOOP_HOME:-$HOME/.hadoop-dummy}"
-  mkdir -p "$HADOOP_HOME"
+  [[ -n "${JAVA_HOME:-}" ]] && export PATH="$JAVA_HOME/bin:$PATH"
+  java -version 2>&1 | head -n1 || true
 fi
 
-# ───────────────────────────────────────────────────────────────────────────────
-# 1) Limpieza de artefactos temporales y datos Hive/Spark locales
-# ───────────────────────────────────────────────────────────────────────────────
-echo "🧹 Limpiando metastore local, logs y warehouse de Spark..."
+# 1) Construir thin JAR
+echo "🎯 Construyendo thin jar (assembly)…"
+sbt -v clean assembly
+JAR="target/scala-2.12/compare-assembly.jar"
+[[ -f "$JAR" ]] || { echo "🛑 No existe $JAR"; exit 1; }
+
+# 2) Asegurar Spark 3.5.2 local si no hay 3.5.x en PATH
+ensure_spark35() {
+  local need=true
+  if command -v spark-submit >/dev/null 2>&1; then
+    local v
+    v="$(spark-submit --version 2>&1 | grep -Eo 'version [0-9]+\.[0-9]+\.[0-9]+' | head -n1 | awk '{print $2}')" || true
+    [[ "$v" =~ ^3\.5\.[0-9]+$ ]] && need=false
+  fi
+  if $need; then
+    echo "⬇️  Descargando Spark 3.5.2…"
+    mkdir -p .spark
+    local tgz=".spark/spark-3.5.2-bin-hadoop3.tgz"
+    local dir=".spark/spark-3.5.2-bin-hadoop3"
+    [[ -f "$tgz" ]] || curl -fL --progress-bar \
+      "https://archive.apache.org/dist/spark/spark-3.5.2/spark-3.5.2-bin-hadoop3.tgz" \
+      -o "$tgz"
+    [[ -d "$dir" ]] || tar -xzf "$tgz" -C .spark
+    export SPARK_HOME="$(cd "$dir" && pwd -P)"
+    export PATH="$SPARK_HOME/bin:$PATH"
+  fi
+  echo "✨ Spark: $(spark-submit --version 2>&1 | head -n1)"
+}
+ensure_spark35
+
+# 3) Metastore local Derby
+echo "🧹 Limpiando metastore/warehouse…"
 rm -rf metastore_db/ derby.log
-rm -rf spark-warehouse/*
+mkdir -p spark-warehouse
 
-# Limpia también los directorios de compilación de sbt
-echo "🧹 Limpiando artefactos de compilación (target/ y project/target/)..."
-rm -rf target/ project/target/
-
-# (Opcional) Si quisieras limpiar TODO lo no versionado en Git, descomenta:
-# echo "🧹 Limpieza profunda con Git (¡cuidado!)..."
-# git clean -fdx
-
-# ───────────────────────────────────────────────────────────────────────────────
-# 2) Compilación y ejecución
-# ───────────────────────────────────────────────────────────────────────────────
-echo "🎯 Compilando y ejecutando el proyecto con sbt..."
-# En macOS pasamos -java-home con el JDK 17 localizado; en otros SO no hace falta
-sbt "${SBT_JAVA_HOME_ARGS[@]}" clean compile run
-
-echo "✅ Ejecución completada"
+# 4) Ejecutar
+echo "📦 Ejecutando spark-submit con $JAR"
+exec spark-submit \
+  --class Main \
+  --master local[*] \
+  --conf spark.sql.warehouse.dir="$PWD/spark-warehouse" \
+  --conf spark.hadoop.hive.metastore.warehouse.dir="$PWD/spark-warehouse" \
+  --conf javax.jdo.option.ConnectionURL="jdbc:derby:;databaseName=$PWD/metastore_db;create=true" \
+  --conf javax.jdo.option.ConnectionDriverName=org.apache.derby.jdbc.EmbeddedDriver \
+  --conf datanucleus.autoCreateSchema=true \
+  --conf datanucleus.fixedDatastore=false \
+  --conf datanucleus.readOnlyDatastore=false \
+  --conf hive.metastore.schema.verification=false \
+  --conf hive.metastore.schema.verification.record.version=false \
+  "$JAR"

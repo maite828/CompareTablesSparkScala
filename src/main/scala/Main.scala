@@ -1,6 +1,3 @@
-// src/main/scala/Main.scala
-// (no package to match your current project layout)
-
 import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
 
 import java.math.BigDecimal
@@ -17,27 +14,63 @@ object Main {
 
   private val mapper = new ObjectMapper()
 
-  /** Read required text field with explicit error if missing. */
+  // ---------------------------- utils JSON ----------------------------
   private def reqText(node: JsonNode, field: String): String = {
     val n = node.get(field)
     if (n == null || n.isNull || n.asText().trim.isEmpty)
       throw new IllegalArgumentException(s"""Missing or empty required field: "$field" in parameters""")
     n.asText()
   }
-
-  /** Read an array of strings, returning an immutable Seq (List under the hood). */
   private def arrOfStrings(node: JsonNode, field: String): Seq[String] = {
     val n = node.get(field)
     if (n == null || n.isNull) Seq.empty[String]
     else n.elements().asScala.map(_.asText()).toList
   }
-
-  /** Read a boolean field with default. */
   private def bool(node: JsonNode, field: String, dflt: Boolean): Boolean =
-    Option(node.get(field)).exists(_.asBoolean(dflt))
+    Option(node.get(field)).map(_.asBoolean(dflt)).getOrElse(dflt)
 
+  /** Extrae pares key -> value de un partitionSpec normalizado (key="val"/k2="v2"). */
+  private def parsePartitionsFromSpec(partitionSpecOpt: Option[String]): Map[String, String] = {
+    partitionSpecOpt.map { spec =>
+      spec.split("/").toSeq.flatMap { kv =>
+        val p = kv.split("=", 2)
+        if (p.length == 2) {
+          val k = p(0).trim
+          val v = p(1).trim.stripPrefix("\"").stripSuffix("\"")
+          Some(k -> v)
+        } else None
+      }.toMap
+    }.getOrElse(Map.empty)
+  }
+
+  // ---------------------------- helpers de debug ----------------------------
+  private def showCreateAndCounts(
+      spark: SparkSession,
+      table: String,
+      parts: Map[String,String]
+  ): Unit = {
+    println(s"\n[DEBUG] SHOW CREATE TABLE $table")
+    try spark.sql(s"SHOW CREATE TABLE $table").show(200, false)
+    catch { case e: Throwable => println(s"  (no existe aún) -> ${e.getMessage}") }
+
+    println(s"[DEBUG] COUNT(*) en $table")
+    try spark.sql(s"SELECT COUNT(*) AS cnt FROM $table").show(false)
+    catch { case e: Throwable => println(s"  (no existe) -> ${e.getMessage}") }
+
+    if (parts.nonEmpty) {
+      val where = parts.map{ case (k,v) => s"$k='${v.replace("'", "\\'")}'" }.mkString(" AND ")
+      println(s"[DEBUG] COUNT(*) en $table WHERE $where")
+      try spark.sql(s"SELECT COUNT(*) AS cnt FROM $table WHERE $where").show(false)
+      catch { case e: Throwable => println(s"  (no existe/partición) -> ${e.getMessage}") }
+
+      println(s"[DEBUG] 5 filas de $table WHERE $where")
+      try spark.sql(s"SELECT * FROM $table WHERE $where LIMIT 5").show(false)
+      catch { case _: Throwable => () }
+    }
+  }
+
+  // ---------------------------- main ----------------------------
   def main(args: Array[String]): Unit = {
-    // 0) Spark with Hive support enabled
     val spark = SparkSession.getActiveSession.getOrElse(
       SparkSession.builder()
         .appName("AML-Internal-Tools")
@@ -46,69 +79,82 @@ object Main {
         .getOrCreate()
     )
 
-    // ---------- Simulation config (build sample data and a JSON payload) ----------
-    val jexecutionDateISO = "2025-07-01" // execution date (e.g. dag_run.conf.args[0])
-    val jgeoPart         = "ES"          // example of another partition
-    val jinitiativeName  = "Swift"
-    val jtablePrefix     = "default.result_" // trailing "_" to ensure *_differences/summary/duplicates
+    // Si el JSON de Airflow está presente, lo usamos, sino usamos datos hardcode
+    val inboundJson: String =
+      if (args != null && args.length >= 1 && args(0) != null && args(0).trim.startsWith("{")) 
+        args(0).trim
+      else {
+        // Datos hardcode en modo local
+        val jexecutionDateISO = "2025-07-01"
+        s"""
+           |{
+           |  "parameters": {
+           |    "refTable": "default.ref_customers",
+           |    "newTable": "default.new_customers",
+           |    "partitionSpec": "geo=BJG/data_date_part=YYYY-MM-dd/",
+           |    "compositeKeyCols": ["id"],
+           |    "ignoreCols": ["last_update"],
+           |    "initiativeName": "Swift",
+           |    "tablePrefix": "default.result_",
+           |    "checkDuplicates": true,
+           |    "includeEqualsInDiff": false,
+           |    "executionDate": "$jexecutionDateISO"
+           |  }
+           |}
+           |""".stripMargin.trim
+     }
 
-    // 1) Create sample DataFrames and source tables
-    val (refDF, newDF) = createTestDataFrames(spark, jexecutionDateISO, jgeoPart)
-    createAndLoadSourceTables(spark, refDF, newDF)
-    println(s"Ref/New tables created with partitions: (date, geo)")
-    println(s"Initiative: $jinitiativeName")
+    println(s"[Main] JSON recibido/embebido:\n$inboundJson")
 
-    // 2) Clean result tables (only outputs)
-    val diffTableName      = s"${jtablePrefix}differences"
-    val summaryTableName   = s"${jtablePrefix}summary"
-    val duplicatesTableName= s"${jtablePrefix}duplicates"
-    cleanOnlyTables(spark, diffTableName, summaryTableName, duplicatesTableName)
-
-    // 3) Build the single-argument JSON payload (as Airflow would send)
-    val jsonPayload =
-      s"""
-         |{
-         |  "parameters": {
-         |    "refTable": "default.ref_customers",
-         |    "newTable": "default.new_customers",
-         |    "partitions": { "date": "$jexecutionDateISO", "geo": "$jgeoPart" },
-         |    "compositeKeyCols": ["id"],
-         |    "ignoreCols": ["last_update"],
-         |    "initiativeName": "$jinitiativeName",
-         |    "tablePrefix": "$jtablePrefix",
-         |    "checkDuplicates": true,
-         |    "includeEqualsInDiff": false,
-         |    "executionDate": "$jexecutionDateISO"
-         |  }
-         |}
-         |""".stripMargin
-
-    // 4) Single-entry JSON mode (like HybridOperator)
-    val root    = mapper.readTree(jsonPayload.trim)
+    // ------------------ parseo y normalización con PartitionFormatTool ------------------
+    val root    = mapper.readTree(inboundJson)
     val params0 = Option(root.get("parameters"))
       .getOrElse(throw new IllegalArgumentException("""Missing "parameters" object"""))
 
-    // executionDate is required to perform agnostic replacement
     val executionDateISO = Option(params0.get("executionDate"))
       .map(_.asText()).filter(_.nonEmpty)
       .getOrElse(throw new IllegalArgumentException("""Missing "executionDate" in parameters"""))
 
-    // Normalize parameters (deep token/date replacement) and compute final partitionSpec
+    // Reescribe tokens/placeholder de fecha y construye partitionSpec final si aplica
     val (params, partitionSpecOpt) = PartitionFormatTool.normalizeParameters(params0, executionDateISO)
     println(s"[DEBUG] partitionSpec (normalized): ${partitionSpecOpt.getOrElse("<none>")}")
 
-    // Read normalized fields
-    val refTable        = reqText(params, "refTable")
-    val newTable        = reqText(params, "newTable")
-    val initiativeName  = reqText(params, "initiativeName")
-    val tablePrefixRaw  = reqText(params, "tablePrefix")
-    val tablePrefix     = if (tablePrefixRaw.endsWith("_")) tablePrefixRaw else s"${tablePrefixRaw}_"
-    val compositeKeyCols= arrOfStrings(params, "compositeKeyCols")
-    val ignoreCols      = arrOfStrings(params, "ignoreCols")
-    val checkDuplicates = bool(params, "checkDuplicates", false)
-    val includeEquals   = bool(params, "includeEqualsInDiff", false)
+    // Campos normalizados
+    val refTable         = reqText(params, "refTable")
+    val newTable         = reqText(params, "newTable")
+    val initiativeName   = reqText(params, "initiativeName")
+    val tablePrefixRaw   = reqText(params, "tablePrefix")
+    val tablePrefix      = if (tablePrefixRaw.endsWith("_")) tablePrefixRaw else s"${tablePrefixRaw}_"
+    val compositeKeyCols = arrOfStrings(params, "compositeKeyCols")
+    val ignoreCols       = arrOfStrings(params, "ignoreCols")
+    val checkDuplicates  = bool(params, "checkDuplicates", false)
+    val includeEquals    = bool(params, "includeEqualsInDiff", false)
 
-    // Build config and run
+    // ------------------ preparar datos de prueba con las MISMAS particiones que vienen por JSON ------------------
+    val partsMap: Map[String, String] = parsePartitionsFromSpec(partitionSpecOpt)
+    println(s"[DEBUG] partitions map: $partsMap")
+
+    // 1) Crear DFs base (SIN columnas de partición)
+    val (refDFBase, newDFBase) = createTestDataFrames(spark)
+
+    // 2) Crear tablas de origen con las particiones EXACTAS de partsMap y cargar datos
+    createAndLoadSourceTables(spark, refDFBase, newDFBase, refTable, newTable, partsMap)
+
+    // Verificación inmediata de fuentes
+    showCreateAndCounts(spark, refTable, partsMap)
+    showCreateAndCounts(spark, newTable, partsMap)
+
+    // 3) Limpiar SOLO las tablas de salida (prefijo del JSON)
+    val diffTableName       = s"${tablePrefix}differences"
+    val summaryTableName    = s"${tablePrefix}summary"
+    val duplicatesTableName = s"${tablePrefix}duplicates"
+    cleanOnlyTables(spark, diffTableName, summaryTableName, duplicatesTableName)
+
+    // 4) Mostrar resultados filtrados por iniciativa y fecha (extraída del spec)
+    // (después de normalizar parámetros)
+    val outputDateISO = PartitionFormatTool.extractDateFromPartitionSpec(partitionSpecOpt)
+    println(s"[DEBUG] outputDateISO (para data_date_part): $outputDateISO")
+
     val cfg = CompareConfig(
       spark               = spark,
       refTable            = refTable,
@@ -119,29 +165,41 @@ object Main {
       initiativeName      = initiativeName,
       tablePrefix         = tablePrefix,
       checkDuplicates     = checkDuplicates,
-      includeEqualsInDiff = includeEquals
+      includeEqualsInDiff = includeEquals,
+
+      // nuevos opcionales (ajusta si quieres):
+      priorityCol         = None,
+      aggOverrides        = Map.empty,
+      nullKeyMatches      = true,
+
+      // fecha que se escribirá en outputs
+      outputDateISO       = outputDateISO
     )
 
     TableComparisonController.run(cfg)
 
-    // Use normalized partitionSpec to derive date for filtering the output
+    // (si quieres ver resultados por consola usando la misma fecha)
+    showComparisonResults(spark, cfg.tablePrefix, cfg.initiativeName, outputDateISO)
+
+
+
+    // 5) Mostrar resultados filtrados por iniciativa y fecha (extraída del spec)
     val execDateForFilter = PartitionFormatTool.extractDateFromPartitionSpec(partitionSpecOpt)
     println(s"[DEBUG] execDateForFilter: $execDateForFilter")
 
-    // 5) Show results
-    showComparisonResults(spark, cfg.tablePrefix, cfg.initiativeName, execDateForFilter)
+
+
+    // (Opcional) tu visor previo
+    // showComparisonResults(spark, cfg.tablePrefix, cfg.initiativeName, execDateForFilter)
+
     println("[Driver] JSON-mode comparison finished.")
-    // spark.stop() // Uncomment if you want to close Spark at the end
+    // spark.stop() // opcional
   }
 
-  // ---------- Helpers for the local simulation ----------
+  // ---------------------------- helpers de simulación ----------------------------
 
-  /** Builds sample DataFrames with DecimalType(38,18) and partition columns (date, geo). */
-  def createTestDataFrames(
-      spark: SparkSession,
-      dataDatePart: String,
-      geoPart: String
-  ): (DataFrame, DataFrame) = {
+  /** DFs de demo (sin columnas de partición). */
+  def createTestDataFrames(spark: SparkSession): (DataFrame, DataFrame) = {
     val schema = StructType(Seq(
       StructField("id", IntegerType, nullable = true),
       StructField("country", StringType, nullable = true),
@@ -184,52 +242,43 @@ object Main {
     )
 
     val refDF = spark.createDataFrame(spark.sparkContext.parallelize(ref), schema)
-      .withColumn("date", lit(dataDatePart))
-      .withColumn("geo",  lit(geoPart))
-
     val newDF = spark.createDataFrame(spark.sparkContext.parallelize(nw), schema)
-      .withColumn("date", lit(dataDatePart))
-      .withColumn("geo",  lit(geoPart))
-
     (refDF, newDF)
   }
 
-  /** Creates Hive tables and loads the sample DataFrames. */
+  /** Crea tablas particionadas con las claves de partsMap y carga datos en esa partición. */
   def createAndLoadSourceTables(
       spark: SparkSession,
-      refDF: DataFrame,
-      newDF: DataFrame
+      refDFBase: DataFrame,
+      newDFBase: DataFrame,
+      refTableName: String,
+      newTableName: String,
+      partsMap: Map[String, String]
   ): Unit = {
-    spark.sql("DROP TABLE IF EXISTS default.ref_customers")
-    spark.sql(
-      """
-        |CREATE TABLE IF NOT EXISTS default.ref_customers (
-        |  id INT,
-        |  country STRING,
-        |  amount DECIMAL(38,18),
-        |  status STRING
-        |)
-        |PARTITIONED BY (date STRING, geo STRING)
-        |STORED AS PARQUET
-      """.stripMargin)
-    refDF.write.mode("overwrite").insertInto("default.ref_customers")
+    val partKeys = partsMap.keys.toSeq
 
-    spark.sql("DROP TABLE IF EXISTS default.new_customers")
-    spark.sql(
-      """
-        |CREATE TABLE IF NOT EXISTS default.new_customers (
-        |  id INT,
-        |  country STRING,
-        |  amount DECIMAL(38,18),
-        |  status STRING
-        |)
-        |PARTITIONED BY (date STRING, geo STRING)
-        |STORED AS PARQUET
-      """.stripMargin)
-    newDF.write.mode("overwrite").insertInto("default.new_customers")
+    def withParts(df: DataFrame): DataFrame =
+      partKeys.foldLeft(df){ case (acc, k) => acc.withColumn(k, lit(partsMap(k))) }
+
+    // Drop y (re)creación con saveAsTable + partitionBy para que el esquema de particiones coincida 1:1
+    spark.sql(s"DROP TABLE IF EXISTS $refTableName")
+    val refDF = withParts(refDFBase)
+    if (partKeys.nonEmpty)
+      refDF.write.mode("overwrite").partitionBy(partKeys:_*).format("parquet").saveAsTable(refTableName)
+    else
+      refDF.write.mode("overwrite").format("parquet").saveAsTable(refTableName)
+
+    spark.sql(s"DROP TABLE IF EXISTS $newTableName")
+    val newDF = withParts(newDFBase)
+    if (partKeys.nonEmpty)
+      newDF.write.mode("overwrite").partitionBy(partKeys:_*).format("parquet").saveAsTable(newTableName)
+    else
+      newDF.write.mode("overwrite").format("parquet").saveAsTable(newTableName)
+
+    println(s"[DEBUG] Tablas cargadas: $refTableName / $newTableName con particiones $partsMap")
   }
 
-  /** Cleans only the result/output tables (differences/summary/duplicates). */
+  /** Limpia solo tablas de salida (differences/summary/duplicates). */
   def cleanOnlyTables(spark: SparkSession, tableNames: String*): Unit = {
     tableNames.foreach { fullTableName =>
       try {
@@ -254,7 +303,7 @@ object Main {
     }
   }
 
-  /** Shows the results filtered by initiative and execution date. */
+  /** Muestra resultados filtrados por initiative y fecha (columna data_date_part en outputs). */
   def showComparisonResults(
       spark: SparkSession,
       prefix: String,
@@ -282,3 +331,4 @@ object Main {
     spark.sql(q(prefix + "duplicates")).show(100, false)
   }
 }
+
