@@ -1,40 +1,75 @@
-# --- SBT / Scala ---
-target/
-project/target/
-project/project/
-.global/
-.metals/
-.bloop/
-.bsp/
-.ensime_cache/
-.worksheet/
+# ------------------------------
+# Sistema / SO
+# ------------------------------
+.DS_Store
+Thumbs.db
 
-# --- IDEs ---
+# ------------------------------
+# IDEs / tooling local
+# ------------------------------
 .idea/
 *.iml
 .vscode/
+.bloop/
+.metals/
+.bsp/
+out/
+.classpath
+.project
+.settings/
 
-# --- macOS / SO ---
-.DS_Store
-*.swp
+# ------------------------------
+# sbt / Scala
+# ------------------------------
+# Todos los targets de subproyectos (root, app-fat, app-thin, core, etc.)
+target/
+project/target/
+project/project/
 
-# --- Spark / Hive local ---
-spark-warehouse/
+# Reportes locales de tests
+test-output/
+*.scala.tmp
+
+# ------------------------------
+# Spark / Hive en local
+# ------------------------------
 metastore_db/
 derby.log
-derby.log.*
-*.lck
-*.log
+spark-warehouse/
+.sparkStaging/
+.hive-local/
+.hiveJars/
 
-# --- Salidas de la app ---
+# ------------------------------
+# Artefactos de build / binarios
+# ------------------------------
+# Evita empujar JARs/ZIPs gordinflones
+*.jar
+*.war
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Si quieres versionar un jar concreto, des-ignóralo con: !ruta/mi.jar
+
+# ------------------------------
+# Datos / resultados generados
+# ------------------------------
 output/
-result_*/
-**/*.crc
+artifacts/
 
-# Si no quieres versionar parquets locales:
-# (descomenta si procede)
-# **/*.parquet
+# Excel/CSV temporales generados por el job
+*.xlsx
+*.xls
+*.csv
+*.parquet
+*.orc
 
-# --- Reports temporales / CI ---
-test-reports/
-task-temp-directory/
+# ------------------------------
+# Docker / entornos
+# ------------------------------
+.env
+.env.*
+docker-data/
+.docker/

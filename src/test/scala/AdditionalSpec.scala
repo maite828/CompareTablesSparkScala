@@ -32,9 +32,18 @@ class AdditionalSpec extends AnyFlatSpec with Matchers with SparkSessionTestWrap
       priorityCol         = None,
       aggOverrides        = Map.empty,
       exportExcelPath     = None,
+      outputDateISO       = "2025-01-01"
     )
 
-    val diffs = DiffGenerator.generateDifferencesTable(spark, ref, newDf, Seq("id"), Seq("val"), includeEquals = false, cfg)
+    val diffs = DiffGenerator.generateDifferencesTable(
+      spark,
+      ref,
+      newDf,
+      Seq("id"),
+      Seq("val"),
+      includeEquals = false,
+      cfg
+    )
     diffs.select("results").as[String].collect() should not contain ("MATCH")
   }
 
@@ -53,28 +62,27 @@ class AdditionalSpec extends AnyFlatSpec with Matchers with SparkSessionTestWrap
     val newDF = spark.createDataFrame(spark.sparkContext.emptyRDD[Row], schema)
 
     val cfg = CompareConfig(
-      spark            = spark,
-      refTable         = "x.ref",
-      newTable         = "x.new",
-      partitionSpec    = None,
-      compositeKeyCols = Seq("id"),
-      ignoreCols       = Seq.empty,
-      initiativeName   = "t",
-      tablePrefix      = "u_",
-      checkDuplicates  = true,
+      spark               = spark,
+      refTable            = "x.ref",
+      newTable            = "x.new",
+      partitionSpec       = None,
+      compositeKeyCols    = Seq("id"),
+      ignoreCols          = Seq.empty,
+      initiativeName      = "t",
+      tablePrefix         = "u_",
+      checkDuplicates     = true,
       includeEqualsInDiff = false,
-      autoCreateTables = false,
-      priorityCol      = Some("ts"),
+      autoCreateTables    = false,
+      priorityCol         = Some("ts"),
       aggOverrides        = Map.empty,
-      exportExcelPath     = None
+      exportExcelPath     = None,
+      outputDateISO       = "2025-01-01"
     )
 
     val dups = DuplicateDetector.detectDuplicatesTable(spark, refDF, newDF, Seq("id"), cfg)
     // Con priorityCol, la fila de mayor ts queda y no hay duplicados
     dups.count() shouldEqual 0L
   }
-
-  // --------------------------------------------------------------------------
 
   // --------------------------------------------------------------------------
   // C. pctStr denominador = 0
