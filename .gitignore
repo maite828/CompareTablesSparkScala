@@ -73,3 +73,6 @@ artifacts/
 .env.*
 docker-data/
 .docker/
+
+# Spark local cache
+.spark/
