@@ -43,32 +43,6 @@ object Main {
     }.getOrElse(Map.empty)
   }
 
-  // ---------------------------- helpers de debug ----------------------------
-  private def showCreateAndCounts(
-      spark: SparkSession,
-      table: String,
-      parts: Map[String,String]
-  ): Unit = {
-    println(s"\n[DEBUG] SHOW CREATE TABLE $table")
-    try spark.sql(s"SHOW CREATE TABLE $table").show(200, false)
-    catch { case e: Throwable => println(s"  (no existe aún) -> ${e.getMessage}") }
-
-    println(s"[DEBUG] COUNT(*) en $table")
-    try spark.sql(s"SELECT COUNT(*) AS cnt FROM $table").show(false)
-    catch { case e: Throwable => println(s"  (no existe) -> ${e.getMessage}") }
-
-    if (parts.nonEmpty) {
-      val where = parts.map{ case (k,v) => s"$k='${v.replace("'", "\\'")}'" }.mkString(" AND ")
-      println(s"[DEBUG] COUNT(*) en $table WHERE $where")
-      try spark.sql(s"SELECT COUNT(*) AS cnt FROM $table WHERE $where").show(false)
-      catch { case e: Throwable => println(s"  (no existe/partición) -> ${e.getMessage}") }
-
-      println(s"[DEBUG] 5 filas de $table WHERE $where")
-      try spark.sql(s"SELECT * FROM $table WHERE $where LIMIT 5").show(false)
-      catch { case _: Throwable => () }
-    }
-  }
-
   // ---------------------------- main ----------------------------
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.getActiveSession.getOrElse(
@@ -182,15 +156,9 @@ object Main {
     showComparisonResults(spark, cfg.tablePrefix, cfg.initiativeName, outputDateISO)
 
 
-
     // 5) Mostrar resultados filtrados por iniciativa y fecha (extraída del spec)
     val execDateForFilter = PartitionFormatTool.extractDateFromPartitionSpec(partitionSpecOpt)
     println(s"[DEBUG] execDateForFilter: $execDateForFilter")
-
-
-
-    // (Opcional) tu visor previo
-    // showComparisonResults(spark, cfg.tablePrefix, cfg.initiativeName, execDateForFilter)
 
     println("[Driver] JSON-mode comparison finished.")
     // spark.stop() // opcional
