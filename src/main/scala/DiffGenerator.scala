@@ -1,53 +1,70 @@
-// src/main/scala/DiffGenerator.scala
-// (sin package)
+// src/main/scala/com/santander/cib/adhc/internal_aml_tools/app/table_comparator/DiffGenerator.scala
 
-import java.util.Locale
-import org.apache.spark.sql.{DataFrame, SparkSession, Column, Row}
+import org.apache.logging.log4j.scala.Logging
+import org.apache.spark.sql.{Column, DataFrame, Row, SparkSession}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
-import CompareConfig._
 
-object DiffGenerator {
+import java.util.Locale
 
-  /** Formatea valores a string respetando la escala de DecimalType. */
+object DiffGenerator extends Logging {
+
+  // ─────────────────────────── logger + println ───────────────────────────
+  private def info(msg: String): Unit = { logger.info(msg); println(msg) }
+  private def warn(msg: String): Unit = { logger.warn(msg); println(msg) }
+
+  // Esquema del resultado por si hay que devolver DF vacío (sin columnas comparables)
+  private val diffSchema: StructType = StructType(Seq(
+    StructField("id",        StringType, true),
+    StructField("column",    StringType, true),
+    StructField("value_ref", StringType, true),
+    StructField("value_new", StringType, true),
+    StructField("results",   StringType, true)
+  ))
+
+  /** Formatea valores a cadena, respetando la escala de DecimalType tal cual */
   private def formatValue(c: Column, dt: DataType): Column = dt match {
     case _: DecimalType =>
-      val s = c.cast(StringType)
-      when(s.isNull || trim(s) === "", lit("-")).otherwise(s)
+      val s = c.cast(StringType); when(s.isNull || trim(s) === "", lit("-")).otherwise(s)
     case _ =>
-      val s = c.cast(StringType)
-      when(s.isNull || trim(s) === "", lit("-")).otherwise(s)
+      val s = c.cast(StringType); when(s.isNull || trim(s) === "", lit("-")).otherwise(s)
   }
 
-  /** Representación canónica determinista para comparaciones. */
+  /** Representación canónica determinista para comparaciones */
   private def canonicalize(c: Column, dt: DataType): Column = dt match {
     case _: NumericType   => c
     case _: BooleanType   => c
     case _: DateType      => c
     case _: TimestampType => c
-    case _: StringType    => when(c.isNull, lit(null).cast(StringType)).otherwise(c.cast(StringType))
-    case mt: MapType      =>
-      val sorted = array_sort(map_entries(c))
-      to_json(map_from_entries(sorted))
-    case _: ArrayType  => to_json(c)
-    case _: StructType => to_json(c)
-    case BinaryType    => when(c.isNull, lit(null)).otherwise(encode(c.cast("binary"), "base64"))
-    case _             => to_json(c)
+    case _: StringType    => when(c.isNull, lit(null)).otherwise(c.cast(StringType))
+    case _: MapType       =>
+      val sorted = array_sort(map_entries(c)); to_json(map_from_entries(sorted))
+    case _: ArrayType     => to_json(c)
+    case _: StructType    => to_json(c)
+    case BinaryType       => when(c.isNull, lit(null)).otherwise(encode(c.cast("binary"), "base64"))
+    case _                => to_json(c)
   }
 
+  /** ¿Es constante (0 ó 1 valores distintos) este DF para la columna? */
   private def isConstantColumn(df: DataFrame, colName: String): Boolean =
     df.select(col(colName)).distinct().limit(2).count() <= 1
 
+  /** Valor constante (en String) si la col es constante y el DF tiene filas; si no, None */
+  private def constantValue(df: DataFrame, colName: String): Option[String] = {
+    val c = df.select(col(colName)).where(col(colName).isNotNull).distinct().limit(2).collect()
+    if (c.length == 1) Option(c(0).get(0)).map(_.toString) else None
+  }
+
   def generateDifferencesTable(
-      spark: SparkSession,
-      refDf: DataFrame,
-      newDf: DataFrame,
-      compositeKeyCols: Seq[String],
-      compareColsIn: Seq[String],
-      includeEquals: Boolean,
-      config: CompareConfig
-  ): DataFrame = {
+                                spark: SparkSession,
+                                refDf: DataFrame,
+                                newDf: DataFrame,
+                                compositeKeyCols: Seq[String],
+                                compareColsIn: Seq[String],
+                                includeEquals: Boolean,
+                                config: CompareConfig
+                              ): DataFrame = {
     import spark.implicits._
 
     // 1) Normalizar claves vacías a NULL
@@ -55,45 +72,68 @@ object DiffGenerator {
     val nRef = compositeKeyCols.foldLeft(refDf)((df, k) => df.withColumn(k, norm(col(k))))
     val nNew = compositeKeyCols.foldLeft(newDf)((df, k) => df.withColumn(k, norm(col(k))))
 
-    // 2) Filtrar columnas constantes (comunes a ambos)
+    val hasRef = nRef.limit(1).count() > 0
+    val hasNew = nNew.limit(1).count() > 0
+    info(s"[DEBUG] DiffGenerator: hasRef=$hasRef, hasNew=$hasNew")
+
+    // 2) Filtrar columnas de trabajo
     val baseCols   = compareColsIn.filterNot(compositeKeyCols.contains).distinct
     val commonCols = nRef.columns.toSet.intersect(nNew.columns.toSet)
-    val consts     = commonCols.filter { c =>
-      baseCols.contains(c) && isConstantColumn(nRef, c) && isConstantColumn(nNew, c)
+
+    // 2.a) Excluir constantes SOLO si ambos lados tienen filas y el valor constante es el mismo en ambos
+    val compareCols: Seq[String] =
+      if (!hasRef || !hasNew) {
+        if (!hasRef || !hasNew)
+          warn(s"[WARN] Un lado no tiene filas; NO se aplicará filtro de columnas constantes.")
+        baseCols.filter(commonCols.contains)
+      } else {
+        val equalConstantCols = baseCols.filter { c =>
+          if (!commonCols.contains(c)) false
+          else if (!isConstantColumn(nRef, c) || !isConstantColumn(nNew, c)) false
+          else {
+            val vRef = constantValue(nRef, c)
+            val vNew = constantValue(nNew, c)
+            vRef.isDefined && vNew.isDefined && vRef.get == vNew.get
+          }
+        }
+        if (equalConstantCols.nonEmpty)
+          info(s"[INFO] Excluyendo columnas constantes con el MISMO valor en ambos lados: ${equalConstantCols.mkString(",")}")
+        baseCols.filterNot(equalConstantCols.toSet)
+      }
+
+    // Guardarraíl: si no hay columnas comparables, devolvemos DF vacío con esquema
+    if (compareCols.isEmpty) {
+      warn("[WARN] No hay columnas comparables tras filtros (claves/particiones/constantes/ignorar). Se devuelve DF vacío.")
+      return spark.createDataFrame(spark.sparkContext.emptyRDD[Row], diffSchema)
     }
-    if (consts.nonEmpty) println(s"[INFO] Excluyendo columnas constantes: ${consts.mkString(",")}")
-    val compareCols = baseCols.filterNot(consts.contains)
 
     // 3) Pre-orden determinista si hay priorityCol
     def preOrdered(df: DataFrame): DataFrame = config.priorityCol match {
-      case Some(colName: String) if df.columns.contains(colName) =>
-        val w = Window.partitionBy(compositeKeyCols.map(col): _*)
-                      .orderBy(col(colName).desc_nulls_last)
+      case Some(prio) if df.columns.contains(prio) =>
+        val w = Window.partitionBy(compositeKeyCols.map(col): _*).orderBy(col(prio).desc_nulls_last)
         df.withColumn("_rn", row_number().over(w)).filter($"_rn" === 1).drop("_rn")
       case _ => df
     }
     val refBase = preOrdered(nRef)
     val newBase = preOrdered(nNew)
 
-    // 4) Agregación con overrides (por nombre en minúsculas)
+    // 4) Agregación con overrides (strings)
     val aggs: Seq[Column] = compareCols.map { c =>
       val dt    = refBase.schema(c).dataType
       val canon = canonicalize(col(c), dt)
-      config.aggOverrides
-        .getOrElse(c, "")
-        .toLowerCase(Locale.ROOT) match {
-          case "max"             => max(canon.cast(dt)).as(c)
-          case "min"             => min(canon.cast(dt)).as(c)
-          case "first_non_null" | "firstnonnull" | "first" =>
-            first(col(c), ignoreNulls = true).as(c)
-          case _ =>
-            dt match {
-              case _: NumericType | _: BooleanType | _: DateType | _: TimestampType =>
-                max(canon.cast(dt)).as(c)
-              case _ =>
-                max(canon).as(c)
-            }
-        }
+      config.aggOverrides.get(c).map(_.toLowerCase(Locale.ROOT)).getOrElse("") match {
+        case "max"                           => max(canon.cast(dt)).as(c)
+        case "min"                           => min(canon.cast(dt)).as(c)
+        case "first_non_null" | "first" |
+             "firstnonnull" | "first-non-null" => first(col(c), ignoreNulls = true).as(c)
+        case _ =>
+          dt match {
+            case _: NumericType | _: BooleanType | _: DateType | _: TimestampType =>
+              max(canon.cast(dt)).as(c)
+            case _ =>
+              max(canon).as(c)
+          }
+      }
     }
 
     val refAgg = refBase
@@ -125,23 +165,23 @@ object DiffGenerator {
     val diffs = compareCols.map(c => buildDiffStruct(compositeKeyCols, c, dtMap(c)))
     val exploded = joined
       .select(array(diffs: _*).as("diffs"))
-      .withColumn("diff", explode($"diffs"))
+      .withColumn("diff", explode(col("diffs")))
       .select("diff.*")
 
-    if (includeEquals) exploded else exploded.filter($"results" =!= "MATCH")
+    if (includeEquals) exploded else exploded.filter(col("results") =!= "MATCH")
   }
 
-  /** Construye la struct de diff con formateo fiel por tipo. */
+  /** Struct de diff para una columna (id, column, value_ref, value_new, results) */
   private def buildDiffStruct(
-      keyCols: Seq[String],
-      colName: String,
-      dt: DataType
-  ): Column = {
+                               keyCols: Seq[String],
+                               colName: String,
+                               dt: DataType
+                             ): Column = {
     val refCol = col(s"ref.$colName")
     val newCol = col(s"new.$colName")
 
-    val result = when(!col("exists_new"), lit("ONLY_IN_NEW")) // si no hay new → sólo existe en ref? (ajusta si deseas)
-      .when(!col("exists_ref"), lit("ONLY_IN_REF"))
+    val result = when(!col("exists_ref"), lit("ONLY_IN_NEW"))
+      .when(!col("exists_new"), lit("ONLY_IN_REF"))
       .when(refCol <=> newCol, lit("MATCH"))
       .otherwise(lit("NO_MATCH"))
 

@@ -1,63 +1,37 @@
-/**
- * SummaryGenerator is an object that provides utilities to generate a summary table comparing two DataFrames,
- * typically used for data quality and reconciliation between a reference and a new dataset.
- *
- * Main Features:
- * - Calculates key metrics such as unique IDs, total rows, differences in row counts, and global quality.
- * - Identifies exact matches, variations, gaps (IDs only in one dataset), and duplicates across datasets.
- * - Provides examples of IDs for each metric for easier inspection.
- * - Supports exporting the summary table to Excel format.
- *
- * Key Methods:
- * - generateSummaryTable: Builds a summary DataFrame with metrics and sample IDs, given reference, new, diff, and duplicate DataFrames.
- * - exportToExcel: Exports the summary DataFrame to an Excel file using the crealytics spark-excel library.
- *
- * Helper Functions:
- * - pctStr: Formats percentage values with one decimal, returns "-" if denominator is zero.
- * - nz: Normalizes empty strings to NULL for consistent ID construction.
- * - idsToStr: Converts a DataFrame of IDs to a comma-separated string of examples.
- *
- * Usage:
- * 1. Prepare the required DataFrames (refDf, newDf, diffDf, dupDf, etc.) and configuration.
- * 2. Call generateSummaryTable to obtain the summary DataFrame.
- * 3. Optionally, export the summary to Excel using exportToExcel.
- */
-
 import org.apache.spark.sql.{DataFrame, SparkSession, SaveMode}
 import org.apache.spark.sql.functions._
-import CompareConfig._
 
 case class SummaryRow(
-  bloque: String,
-  metrica: String,
-  universo: String,
-  numerador: String,
-  denominador: String,
-  pct: String,
-  ejemplos: String
-)
+                       block: String,
+                       metric: String,
+                       universe: String,
+                       numerator: String,
+                       denominator: String,
+                       pct: String,
+                       samples: String
+                     )
 
 object SummaryGenerator {
 
-  /** % con un decimal; "-" cuando el denominador es 0 */
-   def pctStr(num: Long, den: Long): String =
+  /** % con un decimal; "-" cuando el denominator es 0 */
+  def pctStr(num: Long, den: Long): String =
     if (den == 0) "-" else f"${num.toDouble / den * 100}%.1f%%"
 
   /** normaliza strings vacíos a NULL */
-   def nz(c: org.apache.spark.sql.Column) =
+  def nz(c: org.apache.spark.sql.Column) =
     when(trim(c.cast("string")) === "", lit(null)).otherwise(c)
 
   def generateSummaryTable(
-      spark: SparkSession,
-      refDf:           DataFrame,
-      newDf:           DataFrame,
-      diffDf:          DataFrame,
-      dupDf:           DataFrame,
-      compositeKeyCols: Seq[String],
-      refDfRaw:        DataFrame,
-      newDfRaw:        DataFrame,
-      config:          CompareConfig
-  ): DataFrame = {
+                            spark: SparkSession,
+                            refDf:           DataFrame,
+                            newDf:           DataFrame,
+                            diffDf:          DataFrame,
+                            dupDf:           DataFrame,
+                            compositeKeyCols: Seq[String],
+                            refDfRaw:        DataFrame,
+                            newDfRaw:        DataFrame,
+                            config:          CompareConfig
+                          ): DataFrame = {
 
     import spark.implicits._
 
@@ -113,22 +87,22 @@ object SummaryGenerator {
     // Constructor de fila
     def row(b: String, m: String, u: String, num: Long, den: Long, ex: String) =
       SummaryRow(
-        bloque      = b,
-        metrica     = m,
-        universo    = u,
-        numerador   = num.toString,
-        denominador = if (den > 0) den.toString else "-",
+        block      = b,
+        metric     = m,
+        universe    = u,
+        numerator   = num.toString,
+        denominator = if (den > 0) den.toString else "-",
         pct         = pctStr(num, den),
-        ejemplos    = if (ex.nonEmpty) ex else "-"
+        samples    = if (ex.nonEmpty) ex else "-"
       )
 
     // Métricas
     val rows = Seq(
       row("KPIS", "IDs Uniques",           "REF",  nRefIds,     0,   ""          ),
       row("KPIS", "IDs Uniques",           "NEW",  nNewIds,     0,   ""          ),
-      row("KPIS", "Total REF",             "ROWS", totalRowsRef, 0,   ""          ),
-      row("KPIS", "Total NEW",             "ROWS", totalRowsNew, 0,   ""          ),
-      row("KPIS", "Total (NEW-REF)",       "ROWS", totalRowsNew - totalRowsRef, totalRowsRef, "" ),
+      row("KPIS", "Total rows REF",        "ROWS", totalRowsRef, 0,   ""          ),
+      row("KPIS", "Total rows NEW",        "ROWS", totalRowsNew, 0,   ""          ),
+      row("KPIS", "Total diff(new-ref)",   "ROWS", totalRowsNew - totalRowsRef, totalRowsRef, "" ),
       row("KPIS", "Quality global",        "REF",  qualityOk,   nRefIds, ""),
 
       row("MATCH",    "1:1 (exact matches)",      "BOTH", idsExact.count(),      nBothIds,     idsToStr(idsExact)),
@@ -137,9 +111,9 @@ object SummaryGenerator {
       row("GAP", "1:0 (only in reference)", "REF",  idsOnlyR.count(), nRefIds, idsToStr(idsOnlyR)),
       row("GAP", "0:1 (only in new)",       "NEW",  idsOnlyN.count(), nNewIds, idsToStr(idsOnlyN)),
 
-      row("DUPS", "duplicates (both)", "BOTH", dupIdsBoth.count(),    nBothIds,    idsToStr(dupIdsBoth)),
-      row("DUPS", "duplicates (ref)",  "REF",  dupIdsOnlyRef.count(), nRefIds,     idsToStr(dupIdsOnlyRef)),
-      row("DUPS", "duplicates (new)",  "NEW",  dupIdsOnlyNew.count(), nNewIds,     idsToStr(dupIdsOnlyNew))
+      row("DUPS", "duplicates (both)",         "BOTH", dupIdsBoth.count(),    nBothIds,    idsToStr(dupIdsBoth)),
+      row("DUPS", "duplicates (only in ref)",  "REF",  dupIdsOnlyRef.count(), nRefIds,     idsToStr(dupIdsOnlyRef)),
+      row("DUPS", "duplicates (only in new)",  "NEW",  dupIdsOnlyNew.count(), nNewIds,     idsToStr(dupIdsOnlyNew))
     )
 
     spark.createDataset(rows).toDF()
