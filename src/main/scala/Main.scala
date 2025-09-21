@@ -230,7 +230,7 @@ object Main {
   def df1(spark: SparkSession, schema: StructType): DataFrame = {
     val data = Seq(
       Row(1: java.lang.Integer, "US", new BigDecimal("100.40"), "active"),
-      Row(2: java.lang.Integer, "E", new BigDecimal("1.000000000000000001"), "expired"),
+      Row(2: java.lang.Integer, "ES", new BigDecimal("1.000000000000000001"), "expired"),
       Row(4: java.lang.Integer, "BR", new BigDecimal("201.00"), "new"),
       Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"),
       Row(6: java.lang.Integer, "DE", new BigDecimal("400.01"), "new"),

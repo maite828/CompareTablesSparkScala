@@ -37,7 +37,7 @@ class SummaryGeneratorSpec extends AnyFlatSpec with Matchers with SparkSessionTe
     val summary = SummaryGenerator.generateSummaryTable(
       spark, emptyDf, emptyDf, diffDf, dupDf, Seq("id"), emptyDf, emptyDf, cfg)
 
-    summary.filter($"bloque" === "KPIS" && $"metrica" === "Total REF")
+    summary.filter($"bloque" === "KPIS" && $"metrica" === "Total rows REF")
       .select("numerador").as[String].collect().head
   }
 }

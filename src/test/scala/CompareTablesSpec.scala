@@ -99,8 +99,8 @@ class CompareTablesSpec extends AnyFlatSpec with Matchers with SparkSessionTestW
     def num(m: String, u: String): Long = sumDF.filter($"metrica"===m && $"universo"===u).select($"numerador").as[String].head().toLong
     num("IDs Uniques", "REF")  shouldEqual 10L
     num("IDs Uniques", "NEW")  shouldEqual 8L
-    num("Total REF",   "ROWS") shouldEqual 13L
-    num("Total NEW",   "ROWS") shouldEqual 16L
+    num("Total rows REF",   "ROWS") shouldEqual 13L
+    num("Total rows NEW",   "ROWS") shouldEqual 16L
   }
 
   it should "mantener las 7 columnas del resumen" in {
