@@ -22,7 +22,7 @@ final case class CompareConfig(
   initiativeName: String,                        // etiqueta
   tablePrefix: String,                           // p.ej. "default.result_"
   checkDuplicates: Boolean = false,
-  includeEqualsInDiff: Boolean = false,
+  includeEqualsInDiff: Boolean = true,
   autoCreateTables: Boolean = true,
   exportExcelPath: Option[String] = None,        // (opcional) export a Excel
 

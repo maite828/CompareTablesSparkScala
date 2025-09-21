@@ -97,7 +97,7 @@ object Main {
            |    "initiativeName": "Swift",
            |    "tablePrefix": "default.result_",
            |    "checkDuplicates": true,
-           |    "includeEqualsInDiff": false,
+           |    "includeEqualsInDiff": true,
            |    "executionDate": "$jexecutionDateISO"
            |  }
            |}
@@ -207,43 +207,38 @@ object Main {
       StructField("status", StringType, nullable = true)
     ))
 
-    val ref = Seq(
-      Row(1: java.lang.Integer, "US", new BigDecimal("100.40"), "active"),
-      Row(1: java.lang.Integer, "US", new BigDecimal("100.40"), "active"),
-      Row(2: java.lang.Integer, "ES ", new BigDecimal("1.000000000000000001"), "expired"),
-      Row(3: java.lang.Integer, "MX", new BigDecimal("150.00"), "active"),
-      Row(4: java.lang.Integer, "FR", new BigDecimal("200.00"), "new"),
-      Row(4: java.lang.Integer, "BR", new BigDecimal("201.00"), "new"),
-      Row(5: java.lang.Integer, "FR", new BigDecimal("300.00"), "active"),
-      Row(5: java.lang.Integer, "FR", new BigDecimal("300.50"), "active"),
-      Row(7: java.lang.Integer, "PT", new BigDecimal("300.50"), "active"),
-      Row(8: java.lang.Integer, "BR", new BigDecimal("100.50"), "pending"),
-      Row(10: java.lang.Integer, "GR", new BigDecimal("60.00"), "new"),
-      Row(null, "GR", new BigDecimal("61.00"), "new"),
-      Row(null, "GR", new BigDecimal("60.00"), "new")
-    )
+    val refDF = df1(spark, schema)
+    val newDF = df2(spark, schema)
+    (refDF, newDF)
+  }
 
-    val nw = Seq(
+  def df2(spark: SparkSession, schema: StructType): DataFrame = {
+    val data = Seq(
+      Row(0: java.lang.Integer, "USA", new BigDecimal("100.40"), "active"),
       Row(1: java.lang.Integer, "US", new BigDecimal("100.40"), "active"),
       Row(2: java.lang.Integer, "ES", new BigDecimal("1.000000000000000001"), "expired"),
       Row(4: java.lang.Integer, "BR", new BigDecimal("201.00"), "new"),
-      Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"),
-      Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"),
-      Row(4: java.lang.Integer, "BR", new BigDecimal("200.00"), "new"),
       Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"),
-      Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"),
-      Row(6: java.lang.Integer, "DE", new BigDecimal("400.10"), "new"),
+      Row(6: java.lang.Integer, "DE", new BigDecimal("400.01"), "new"),
       Row(7: java.lang.Integer, "", new BigDecimal("300.50"), "active"),
       Row(8: java.lang.Integer, "BR", null, "pending"),
-      Row(null, "GR", new BigDecimal("60.00"), "new"),
-      Row(null, "GR", new BigDecimal("60.00"), "new"),
-      Row(null, "GR", new BigDecimal("60.00"), "new"),
-      Row(null, "GR", new BigDecimal("61.00"), "new")
+      Row(9: java.lang.Integer, "BR", null, "pending")
     )
+    spark.createDataFrame(spark.sparkContext.parallelize(data), schema)
+  }
 
-    val refDF = spark.createDataFrame(spark.sparkContext.parallelize(ref), schema)
-    val newDF = spark.createDataFrame(spark.sparkContext.parallelize(nw), schema)
-    (refDF, newDF)
+  def df1(spark: SparkSession, schema: StructType): DataFrame = {
+    val data = Seq(
+      Row(1: java.lang.Integer, "US", new BigDecimal("100.40"), "active"),
+      Row(2: java.lang.Integer, "E", new BigDecimal("1.000000000000000001"), "expired"),
+      Row(4: java.lang.Integer, "BR", new BigDecimal("201.00"), "new"),
+      Row(6: java.lang.Integer, "DE", new BigDecimal("400.00"), "new"),
+      Row(6: java.lang.Integer, "DE", new BigDecimal("400.01"), "new"),
+      Row(7: java.lang.Integer, "", new BigDecimal("300.50"), "active"),
+      Row(8: java.lang.Integer, "BR", null, "pending"),
+      Row(9: java.lang.Integer, "BR", null, "pending")
+    )
+    spark.createDataFrame(spark.sparkContext.parallelize(data), schema)
   }
 
   /** Crea tablas particionadas con las claves de partsMap y carga datos en esa partición. */

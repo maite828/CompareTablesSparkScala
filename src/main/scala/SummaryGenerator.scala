@@ -41,7 +41,7 @@ object SummaryGenerator {
 
   /** % con un decimal; "-" cuando el denominador es 0 */
    def pctStr(num: Long, den: Long): String =
-    if (den == 0) "-" else f"${num.toDouble / den * 100}%.1f%%"
+    if (den == 0) "-" else f"${num.toDouble / den * 100}%.2f%%"
 
   /** normaliza strings vacíos a NULL */
    def nz(c: org.apache.spark.sql.Column) =
@@ -124,22 +124,22 @@ object SummaryGenerator {
 
     // Métricas
     val rows = Seq(
-      row("KPIS", "IDs Uniques",           "REF",  nRefIds,     0,   ""          ),
-      row("KPIS", "IDs Uniques",           "NEW",  nNewIds,     0,   ""          ),
-      row("KPIS", "Total REF",             "ROWS", totalRowsRef, 0,   ""          ),
-      row("KPIS", "Total NEW",             "ROWS", totalRowsNew, 0,   ""          ),
-      row("KPIS", "Total (NEW-REF)",       "ROWS", totalRowsNew - totalRowsRef, totalRowsRef, "" ),
-      row("KPIS", "Quality global",        "REF",  qualityOk,   nRefIds, ""),
+      row("KPIS", "IDs Uniques", "REF",  nRefIds, 0,   ""          ),
+      row("KPIS", "IDs Uniques", "NEW",  nNewIds, 0,""          ),
+      row("KPIS", "Total rows REF", "ROWS", totalRowsRef, 0, ""          ),
+      row("KPIS", "Total rows NEW", "ROWS", totalRowsNew, 0, ""          ),
+      row("KPIS", "Total diff(new-ref)", "ROWS", totalRowsNew - totalRowsRef, totalRowsRef, "" ),
+      row("KPIS", "Quality global", "REF", qualityOk, nRefIds, ""),
 
-      row("MATCH",    "1:1 (exact matches)",      "BOTH", idsExact.count(),      nBothIds,     idsToStr(idsExact)),
-      row("NO MATCH", "1:1 (match not identical)","BOTH", idsVariations.count(), nBothIds,     idsToStr(idsVariations)),
+      row("EXACT_MATCH", "1:1 (all columns)", "BOTH", idsExact.count(), nBothIds, idsToStr(idsExact)),
+      row("PARTIAL_MATCH", "1:1 (match and not_match cols)","BOTH", idsVariations.count(), nBothIds, idsToStr(idsVariations)),
 
-      row("GAP", "1:0 (only in reference)", "REF",  idsOnlyR.count(), nRefIds, idsToStr(idsOnlyR)),
-      row("GAP", "0:1 (only in new)",       "NEW",  idsOnlyN.count(), nNewIds, idsToStr(idsOnlyN)),
+      row("GAP", "1:0 (only in ref)", "REF", idsOnlyR.count(), nRefIds, idsToStr(idsOnlyR)),
+      row("GAP", "0:1 (only in new)", "NEW", idsOnlyN.count(), nNewIds, idsToStr(idsOnlyN)),
 
-      row("DUPS", "duplicates (both)", "BOTH", dupIdsBoth.count(),    nBothIds,    idsToStr(dupIdsBoth)),
-      row("DUPS", "duplicates (ref)",  "REF",  dupIdsOnlyRef.count(), nRefIds,     idsToStr(dupIdsOnlyRef)),
-      row("DUPS", "duplicates (new)",  "NEW",  dupIdsOnlyNew.count(), nNewIds,     idsToStr(dupIdsOnlyNew))
+      row("DUPS", "duplicates (both)", "BOTH", dupIdsBoth.count(), nBothIds, idsToStr(dupIdsBoth)),
+      row("DUPS", "duplicates (only in ref)", "REF",  dupIdsOnlyRef.count(), nRefIds, idsToStr(dupIdsOnlyRef)),
+      row("DUPS", "duplicates (only in new)", "NEW",  dupIdsOnlyNew.count(), nNewIds, idsToStr(dupIdsOnlyNew))
     )
 
     spark.createDataset(rows).toDF()

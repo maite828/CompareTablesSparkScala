@@ -39,6 +39,21 @@ object DiffGenerator {
   private def isConstantColumn(df: DataFrame, colName: String): Boolean =
     df.select(col(colName)).distinct().limit(2).count() <= 1
 
+  /** Construye la struct para EXACT_MATCH con formateo fijo. */
+  private def buildExactMatchStruct(keyCols: Seq[String]): Column = {
+    val cid = concat_ws("_", keyCols.map { k =>
+      val v = coalesce(col(s"ref.$k"), col(s"new.$k"))
+      when(v.isNull, lit("NULL")).otherwise(v.cast(StringType))
+    }: _*)
+    struct(
+      cid.as("id"),
+      lit("ALL_COLUMNS").as("column"),
+      lit("ALL_MATCH").as("value_ref"),
+      lit("ALL_MATCH").as("value_new"),
+      lit("EXACT_MATCH").as("results")
+    )
+  }
+
   def generateDifferencesTable(
       spark: SparkSession,
       refDf: DataFrame,
@@ -121,14 +136,21 @@ object DiffGenerator {
       .withColumn("exists_ref", col("ref._present").isNotNull)
       .withColumn("exists_new", col("new._present").isNotNull)
 
+    // Calcular si el registro es exact match
+    val exactMatchCondition = compareCols.map { c =>
+      col(s"ref.$c") <=> col(s"new.$c")
+    }.reduce(_ && _) && col("exists_ref") && col("exists_new")
+    val joinedWithExact = joined.withColumn("is_exact_match", exactMatchCondition)
+
     // 7) Explode diferencias
-    val diffs = compareCols.map(c => buildDiffStruct(compositeKeyCols, c, dtMap(c)))
-    val exploded = joined
-      .select(array(diffs: _*).as("diffs"))
+    val diffs = when(col("is_exact_match"), array(buildExactMatchStruct(compositeKeyCols)))
+      .otherwise(array(compareCols.map(c => buildDiffStruct(compositeKeyCols, c, dtMap(c))): _*))
+    val exploded = joinedWithExact
+      .select(diffs.as("diffs"))
       .withColumn("diff", explode($"diffs"))
       .select("diff.*")
 
-    if (includeEquals) exploded else exploded.filter($"results" =!= "MATCH")
+    if (includeEquals) exploded else exploded.filter(!$"results".isin("MATCH", "EXACT_MATCH"))
   }
 
   /** Construye la struct de diff con formateo fiel por tipo. */
@@ -140,7 +162,7 @@ object DiffGenerator {
     val refCol = col(s"ref.$colName")
     val newCol = col(s"new.$colName")
 
-    val result = when(!col("exists_new"), lit("ONLY_IN_NEW")) // si no hay new → sólo existe en ref? (ajusta si deseas)
+    val result = when(!col("exists_new"), lit("ONLY_IN_NEW"))
       .when(!col("exists_ref"), lit("ONLY_IN_REF"))
       .when(refCol <=> newCol, lit("MATCH"))
       .otherwise(lit("NO_MATCH"))
