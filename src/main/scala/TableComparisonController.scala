@@ -31,24 +31,16 @@ object TableComparisonController {
     }
 
     // ── 2) EXTRAER FECHA DE EJECUCIÓN ──
-    val isoRegex    = "[A-Za-z0-9_]+\\s*=\\s*\"([0-9]{4}-[0-9]{2}-[0-9]{2})\"".r
-    val tripleRegex = "[A-Za-z0-9_]+\\s*=\\s*\"([0-9]{2})\"\\s*/\\s*[A-Za-z0-9_]+\\s*=\\s*\"([0-9]{2})\"\\s*/\\s*[A-Za-z0-9_]+\\s*=\\s*\"([0-9]{4})\"".r
+    val partitionEntries = partitionSpec.map(parsePartitionSpec).getOrElse(Seq.empty)
 
-    val executionDate: String = partitionSpec
-      .flatMap { spec =>
-        isoRegex.findFirstMatchIn(spec).map(_.group(1))
-          .orElse(tripleRegex.findFirstMatchIn(spec).map(m => s"${m.group(3)}-${m.group(2)}-${m.group(1)}"))
-      }
-      .getOrElse(LocalDate.now().toString)
+    val executionDate: String = resolveExecutionDate(partitionEntries, executionDateOverride)
 
     // ── 3) CARGAR ORÍGENES Y PODAR COLUMNAS ──
-    val rawRef = loadSource(session, refSource, partitionSpec)
-    val rawNew = loadSource(session, newSource, partitionSpec)
+    val rawRef = loadSource(session, refSource, partitionEntries)
+    val rawNew = loadSource(session, newSource, partitionEntries)
 
     // Determinar columnas a comparar
-    val partitionKeys = partitionSpec
-      .map(_.split("/").map(_.split("=")(0).trim).toSet)
-      .getOrElse(Set.empty[String])
+    val partitionKeys = partitionEntries.map(_._1).toSet
 
     val colsToCompare = rawRef.columns.toSeq
       .filterNot(ignoreCols.contains)
@@ -187,7 +179,7 @@ object TableComparisonController {
   private def loadSource(
       spark: SparkSession,
       source: SourceSpec,
-      partitionSpec: Option[String]
+      partitionEntries: Seq[(String, String)]
   ): DataFrame = {
     val base: DataFrame = source match {
       case HiveTable(tableName, _) =>
@@ -199,20 +191,55 @@ object TableComparisonController {
         reader.load(path)
     }
 
-    // Aplica filtros de partición SOLO si las columnas existen
-    val filtered = partitionSpec
-      .map(_.trim).filter(_.nonEmpty)
-      .map(_.split("/").toSeq)
-      .getOrElse(Seq.empty)
-      .foldLeft(base) { (df, kv) =>
-        val parts = kv.split("=", 2)
-        if (parts.length == 2) {
-          val k = parts(0).trim
-          val v = parts(1).replaceAll("^\"|\"$", "")
-          if (df.columns.contains(k)) df.filter(col(k) === lit(v)) else df
-        } else df
-      }
+    partitionEntries.foldLeft(base) {
+      case (df, (key, value)) if df.columns.contains(key) && shouldApplyPartitionFilter(value) =>
+        df.filter(col(key) === lit(value))
+      case (df, _) => df
+    }
+  }
 
-    filtered
+  private def parsePartitionSpec(spec: String): Seq[(String, String)] = {
+    spec.split("/").toSeq.flatMap { token =>
+      val parts = token.split("=", 2)
+      if (parts.length == 2) {
+        val key   = parts(0).trim
+        val value = parts(1).trim.stripPrefix("\"").stripSuffix("\"")
+        if (key.nonEmpty) Some(key -> value) else None
+      } else None
+    }
+  }
+
+  private val isoDateRegex     = "(\\d{4}-\\d{2}-\\d{2})".r
+  private val tripleDateRegex  = "(\\d{2})/(\\d{2})/(\\d{4})".r
+  private val placeholderRegex = "(?i)^(Y{2,4}|M{2}|D{2})([-_/]?(Y{2,4}|M{2}|D{2}))*$".r
+
+  private def resolveExecutionDate(
+      partitionEntries: Seq[(String, String)],
+      overrideDate: Option[String]
+  ): String = {
+    overrideDate
+      .orElse {
+        partitionEntries.collectFirst { case (_, isoDateRegex(date)) => date }
+      }
+      .orElse {
+        partitionEntries.collectFirst {
+          case (_, tripleDateRegex(day, month, year)) => s"$year-$month-$day"
+        }
+      }
+      .getOrElse(LocalDate.now().toString)
+  }
+
+  private def shouldApplyPartitionFilter(value: String): Boolean = {
+    val trimmed = value.trim
+    if (trimmed.isEmpty) {
+      false
+    } else {
+      val containsTemplate   = trimmed.contains("{{") || trimmed.contains("}}")
+      val looksLikePlaceholder = placeholderRegex.pattern.matcher(trimmed).matches()
+      val hasWildcard        = trimmed.contains("*") || trimmed.equalsIgnoreCase("ALL")
+      val startsWithVar      = trimmed.startsWith("$")
+
+      !(hasWildcard || containsTemplate || looksLikePlaceholder || startsWithVar)
+    }
   }
 }

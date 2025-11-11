@@ -83,6 +83,7 @@ val cfg = CompareConfig(
 | --------------------- | -------------------------------------------------------------- | ----------------- |
 | `includeEqualsInDiff` | Si `true`, guarda las filas **MATCH** en `result_differences`. | `false`           |
 | `checkDuplicates`     | Detecta exactos y variaciones en `result_duplicates`.          | `false`           |
+| `executionDateOverride` | Fecha manual para particionar resultados cuando el `partitionSpec` usa comodines (`*`, `YYYY-MM-dd`, etc.). | *None* |
 | `priorityCol`         | (Opcional) Qué columna elegir como "ganadora" en duplicados.   | *None*            |
 
 ---

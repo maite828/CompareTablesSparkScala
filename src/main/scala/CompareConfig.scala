@@ -19,6 +19,7 @@ final case class CompareConfig(
   ignoreCols: Seq[String],
   initiativeName: String,
   tablePrefix: String,
+  executionDateOverride: Option[String] = None,
   checkDuplicates: Boolean,
   includeEqualsInDiff: Boolean = true,
   autoCreateTables: Boolean  = true,
@@ -49,7 +50,8 @@ object CompareConfig {
     checkDuplicates: Boolean,
     includeEqualsInDiff: Boolean,
     autoCreateTables: Boolean,
-    exportExcelPath: Option[String]
+    exportExcelPath: Option[String],
+    executionDateOverride: Option[String] = None
   ): CompareConfig = {
     CompareConfig(
       spark               = spark,
@@ -60,6 +62,7 @@ object CompareConfig {
       ignoreCols          = ignoreCols,
       initiativeName      = initiativeName,
       tablePrefix         = tablePrefix,
+      executionDateOverride = executionDateOverride,
       checkDuplicates     = checkDuplicates,
       includeEqualsInDiff = includeEqualsInDiff,
       autoCreateTables    = autoCreateTables,

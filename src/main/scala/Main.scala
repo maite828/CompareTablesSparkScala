@@ -48,6 +48,7 @@ object Main {
       ignoreCols         = Seq("last_update"),
       initiativeName     = initiativeName,
       tablePrefix        = tablePrefix,
+      executionDateOverride = Some(dataDatePart),
       checkDuplicates    = true,
       includeEqualsInDiff= true,
       autoCreateTables   = true,
