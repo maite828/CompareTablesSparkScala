@@ -63,6 +63,13 @@ elif $is_windows_gitbash; then
       fi
     done
 
+    # 5) Fallback al JDK 11 conocido
+    DEFAULT_WIN_JAVA="/c/Program Files/Java/jdk-11"
+    if [[ -x "$DEFAULT_WIN_JAVA/bin/java" ]]; then
+      printf '%s\n' "$DEFAULT_WIN_JAVA"
+      return 0
+    fi
+
     return 1
   }
 
