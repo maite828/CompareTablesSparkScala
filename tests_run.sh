@@ -39,6 +39,18 @@ else
 fi
 
 # ───────────────────────────────────────────────────────────────────────────────
+# 1b) Opciones JVM comunes (evitan IllegalAccess con Java 17 en Spark)
+# ───────────────────────────────────────────────────────────────────────────────
+COMMON_JAVA_OPTS=(
+  "--add-opens=java.base/java.lang=ALL-UNNAMED"
+  "--add-opens=java.base/java.io=ALL-UNNAMED"
+  "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED"
+  "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
+)
+export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} ${COMMON_JAVA_OPTS[*]}"
+export SBT_OPTS="${SBT_OPTS:-} ${COMMON_JAVA_OPTS[*]}"
+
+# ───────────────────────────────────────────────────────────────────────────────
 # 2) HADOOP_HOME “dummy” (silencia warnings)
 # ───────────────────────────────────────────────────────────────────────────────
 export HADOOP_HOME="${HADOOP_HOME:-$HOME/.hadoop-dummy}"

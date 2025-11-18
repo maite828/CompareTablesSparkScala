@@ -8,6 +8,12 @@ SPARK_VERSION="${SPARK_VERSION:-3.5.2}"
 SPARK_DIST="spark-${SPARK_VERSION}-bin-hadoop3"
 SPARK_DIR="$PWD/.spark/${SPARK_DIST}"
 SPARK_TGZ_URL="https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/${SPARK_DIST}.tgz"
+COMMON_JAVA_OPTS=(
+  "--add-opens=java.base/java.lang=ALL-UNNAMED"
+  "--add-opens=java.base/java.io=ALL-UNNAMED"
+  "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED"
+  "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
+)
 
 # Selecciona Java 11 (recomendado para Spark 3.5.x)
 if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -20,6 +26,8 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   export PATH="$JAVA_HOME/bin:$PATH"
 fi
 java -version 2>&1 | head -n1
+export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} ${COMMON_JAVA_OPTS[*]}"
+export SPARK_SUBMIT_OPTS="${SPARK_SUBMIT_OPTS:-} ${COMMON_JAVA_OPTS[*]}"
 
 # -------- Build thin jar --------
 echo "🎯 Construyendo thin jar (assembly)…"
