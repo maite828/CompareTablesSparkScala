@@ -74,5 +74,8 @@ artifacts/
 docker-data/
 .docker/
 
-# Spark local cache
+# Spark local cache (except the bundled Spark distro we keep versioned)
 .spark/
+!.spark/spark-3.5.2-bin-hadoop3/
+!.spark/spark-3.5.2-bin-hadoop3/**
+!.spark/spark.tgz
