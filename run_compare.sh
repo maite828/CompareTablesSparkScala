@@ -47,6 +47,12 @@ elif [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == mingw* ]]; th
     fi
 
     # Busca el último JDK instalado en rutas estándar
+    DEFAULT_WIN_JAVA="/c/Program Files/Java/jdk-11"
+    if [[ -x "$DEFAULT_WIN_JAVA/bin/java" ]]; then
+      printf '%s\n' "$DEFAULT_WIN_JAVA"
+      return 0
+    fi
+
     for base in "/c/Program Files/Java" "/c/Program Files (x86)/Java" "/c/Program Files/Eclipse Adoptium"; do
       # shellcheck disable=SC2012
       if candidate=$(ls -1d "$base"/jdk-* "$base"/temurin-* "$base"/zulu-* 2>/dev/null | sort -V | tail -n1); then
