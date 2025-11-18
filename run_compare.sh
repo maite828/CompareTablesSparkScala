@@ -31,6 +31,13 @@ java -version 2>&1 | head -n1
 export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} ${COMMON_JAVA_OPTS[*]}"
 export SPARK_SUBMIT_OPTS="${SPARK_SUBMIT_OPTS:-} ${COMMON_JAVA_OPTS[*]}"
 
+# Forzar SPARK_HOME al bundle del repo en Windows
+if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == mingw* ]]; then
+  if default_win_unix="$(cygpath -u "$DEFAULT_WIN_SPARK" 2>/dev/null || true)"; then
+    export SPARK_HOME="$default_win_unix"
+  fi
+fi
+
 # -------- Build thin jar --------
 echo "🎯 Construyendo thin jar (assembly)…"
 sbt clean assembly
