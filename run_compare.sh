@@ -144,13 +144,21 @@ if [[ ! -d "$SPARK_HOME/jars" ]]; then
   exit 1
 fi
 
+SPARK_SUBMIT_BIN="$SPARK_HOME/bin/spark-submit"
+if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == mingw* ]]; then
+  # Usa el script .cmd para evitar dependencias de ps/cygpath en bash
+  SPARK_HOME_WIN="$(cygpath -m "$SPARK_HOME")"
+  export SPARK_HOME="$SPARK_HOME_WIN"
+  SPARK_SUBMIT_BIN="$SPARK_HOME/bin/spark-submit.cmd"
+fi
+
 echo "🧹 Limpiando metastore/warehouse…"
 rm -rf metastore_db/ derby.log spark-warehouse/* || true
 mkdir -p spark-warehouse
 
 # -------- Run with spark-submit --------
 echo "📦 Ejecutando spark-submit con $JAR_PATH"
-"$SPARK_HOME/bin/spark-submit" \
+"$SPARK_SUBMIT_BIN" \
   --master local[*] \
   --conf spark.sql.catalogImplementation=hive \
   --conf spark.ui.enabled=false \
