@@ -14,6 +14,8 @@ COMMON_JAVA_OPTS=(
   "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED"
   "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
 )
+# Ruta Spark ya presente en Windows (solicitud usuario)
+DEFAULT_WIN_SPARK="C:/Users/x732182/IdeaProjects/mio/CompareTablesSparkScala/.spark/spark-3.5.2-bin-hadoop3"
 
 # Selecciona Java 11 (recomendado para Spark 3.5.x)
 if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -36,32 +38,53 @@ sbt clean assembly
 JAR_PATH="target/scala-2.12/compare-assembly.jar"
 [[ -f "$JAR_PATH" ]] || { echo "🛑 No existe $JAR_PATH"; exit 1; }
 
-# -------- Ensure local Spark distribution --------
-if [[ ! -d "$SPARK_DIR/jars" ]]; then
+# -------- Detect/ensure Spark distribution --------
+detect_spark() {
+  # 1) Honra SPARK_HOME si ya está instalado
+  if [[ -n "${SPARK_HOME:-}" && -x "$SPARK_HOME/bin/spark-submit" ]]; then
+    return 0
+  fi
+
+  # 1b) En Windows, usar la ruta conocida si existe
+  if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == mingw* ]]; then
+    if default_win_unix="$(cygpath -u "$DEFAULT_WIN_SPARK" 2>/dev/null || true)"; then
+      if [[ -x "$default_win_unix/bin/spark-submit" ]]; then
+        export SPARK_HOME="$default_win_unix"
+        return 0
+      fi
+    fi
+  fi
+
+  # 2) Usa caché local ".spark/<dist>"
+  if [[ -x "$SPARK_DIR/bin/spark-submit" ]]; then
+    export SPARK_HOME="$SPARK_DIR"
+    return 0
+  fi
+
+  # 3) Intentar descargar si no existe
   echo "⬇️  Descargando Spark ${SPARK_VERSION}…"
   mkdir -p "$PWD/.spark"
-  CURL_FLAGS=(-fL)
+  CURL_FLAGS=(-fL --connect-timeout 15 --max-time 900)
   if [[ "${SPARK_ALLOW_INSECURE_DOWNLOAD:-}" == "1" ]]; then
     CURL_FLAGS+=(-k)
     echo "⚠️  SPARK_ALLOW_INSECURE_DOWNLOAD=1 → usando curl -k (sin revocación CRL)"
   fi
-  if ! curl "${CURL_FLAGS[@]}" "$SPARK_TGZ_URL" | tar -xz -C "$PWD/.spark"; then
-    if [[ "${SPARK_ALLOW_INSECURE_DOWNLOAD:-}" != "1" ]]; then
-      echo "⚠️  Descarga falló. Reintentando con curl -k por posibles problemas de CRL/certificado…"
-      curl "${CURL_FLAGS[@]}" -k "$SPARK_TGZ_URL" | tar -xz -C "$PWD/.spark" || {
-        echo "🛑 No se pudo descargar Spark. Opciones:"
-        echo "   1) Exporta SPARK_ALLOW_INSECURE_DOWNLOAD=1 y reintenta."
-        echo "   2) Descarga manualmente ${SPARK_TGZ_URL} y descomprime en ${SPARK_DIR%/*}/"
-        exit 1
-      }
-    else
-      echo "🛑 No se pudo descargar Spark incluso con -k. Descarga manualmente ${SPARK_TGZ_URL} en ${SPARK_DIR%/*}/"
-      exit 1
-    fi
+
+  if curl "${CURL_FLAGS[@]}" "$SPARK_TGZ_URL" | tar -xz -C "$PWD/.spark"; then
+    export SPARK_HOME="$SPARK_DIR"
+    return 0
   fi
+
+  echo "⚠️  Descarga falló. Reintenta con SPARK_ALLOW_INSECURE_DOWNLOAD=1 o define SPARK_HOME a tu instalación existente."
+  echo "   URL manual: $SPARK_TGZ_URL"
+  return 1
+}
+
+if ! detect_spark; then
+  exit 1
 fi
-if [[ ! -d "$SPARK_DIR/jars" ]]; then
-  echo "🛑 Spark mal descomprimido (no hay ${SPARK_DIR}/jars)."
+if [[ ! -d "$SPARK_HOME/jars" ]]; then
+  echo "🛑 Spark mal descomprimido (no hay ${SPARK_HOME}/jars)."
   exit 1
 fi
 
@@ -70,7 +93,6 @@ rm -rf metastore_db/ derby.log spark-warehouse/* || true
 mkdir -p spark-warehouse
 
 # -------- Run with spark-submit --------
-export SPARK_HOME="$SPARK_DIR"
 echo "📦 Ejecutando spark-submit con $JAR_PATH"
 "$SPARK_HOME/bin/spark-submit" \
   --master local[*] \
