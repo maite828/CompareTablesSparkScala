@@ -85,6 +85,11 @@ if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == mingw* ]]; then
   fi
   # Evita chequeo de proceso padre (ps -o no soportado en algunas shells)
   export SPARK_NO_PARENT_CHECK=1
+  # Hadoop dummy para Windows (evita winutils)
+  HADOOP_DUMMY_WIN="$PWD/.hadoop-dummy"
+  mkdir -p "$HADOOP_DUMMY_WIN"/bin
+  export HADOOP_HOME="$HADOOP_DUMMY_WIN"
+  export hadoop_home_dir="$HADOOP_DUMMY_WIN"
 fi
 
 # -------- Build thin jar --------
