@@ -26,6 +26,47 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     exit 1
   fi
   export PATH="$JAVA_HOME/bin:$PATH"
+elif [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == mingw* ]]; then
+  resolve_java_home_windows() {
+    # Respeta JAVA_HOME si apunta a un JDK real
+    if [[ -n "${JAVA_HOME:-}" && -x "$JAVA_HOME/bin/java" ]]; then
+      printf '%s\n' "$JAVA_HOME"
+      return 0
+    fi
+
+    # Ignora javapath y deriva desde java en PATH
+    if JAVA_BIN="$(command -v java 2>/dev/null)"; then
+      JAVA_BIN_WIN="$(cygpath -m "$JAVA_BIN")"
+      JAVA_HOME_WIN="${JAVA_BIN_WIN%/bin/java.exe}"
+      JAVA_HOME_WIN="${JAVA_HOME_WIN%/bin/java}"
+      JAVA_HOME_UNIX="$(cygpath -u "$JAVA_HOME_WIN")"
+      if [[ -x "$JAVA_HOME_UNIX/bin/java" ]]; then
+        printf '%s\n' "$JAVA_HOME_UNIX"
+        return 0
+      fi
+    fi
+
+    # Busca el último JDK instalado en rutas estándar
+    for base in "/c/Program Files/Java" "/c/Program Files (x86)/Java" "/c/Program Files/Eclipse Adoptium"; do
+      # shellcheck disable=SC2012
+      if candidate=$(ls -1d "$base"/jdk-* "$base"/temurin-* "$base"/zulu-* 2>/dev/null | sort -V | tail -n1); then
+        if [[ -x "$candidate/bin/java" ]]; then
+          printf '%s\n' "$candidate"
+          return 0
+        fi
+      fi
+    done
+    return 1
+  }
+
+  if resolved_java_home="$(resolve_java_home_windows)"; then
+    export JAVA_HOME="$resolved_java_home"
+    export PATH="$JAVA_HOME/bin:$PATH"
+    echo "🪟 Windows → usando JAVA_HOME=$JAVA_HOME"
+  else
+    echo "🛑 No se encontró JDK en Windows; define JAVA_HOME (ej. C:/Program Files/Java/jdk-17.x)."
+    exit 1
+  fi
 fi
 java -version 2>&1 | head -n1
 export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} ${COMMON_JAVA_OPTS[*]}"
@@ -36,6 +77,8 @@ if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == mingw* ]]; then
   if default_win_unix="$(cygpath -u "$DEFAULT_WIN_SPARK" 2>/dev/null || true)"; then
     export SPARK_HOME="$default_win_unix"
   fi
+  # Evita chequeo de proceso padre (ps -o no soportado en algunas shells)
+  export SPARK_NO_PARENT_CHECK=1
 fi
 
 # -------- Build thin jar --------
