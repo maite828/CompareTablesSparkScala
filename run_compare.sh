@@ -40,7 +40,25 @@ JAR_PATH="target/scala-2.12/compare-assembly.jar"
 if [[ ! -d "$SPARK_DIR/jars" ]]; then
   echo "⬇️  Descargando Spark ${SPARK_VERSION}…"
   mkdir -p "$PWD/.spark"
-  curl -fL "$SPARK_TGZ_URL" | tar -xz -C "$PWD/.spark"
+  CURL_FLAGS=(-fL)
+  if [[ "${SPARK_ALLOW_INSECURE_DOWNLOAD:-}" == "1" ]]; then
+    CURL_FLAGS+=(-k)
+    echo "⚠️  SPARK_ALLOW_INSECURE_DOWNLOAD=1 → usando curl -k (sin revocación CRL)"
+  fi
+  if ! curl "${CURL_FLAGS[@]}" "$SPARK_TGZ_URL" | tar -xz -C "$PWD/.spark"; then
+    if [[ "${SPARK_ALLOW_INSECURE_DOWNLOAD:-}" != "1" ]]; then
+      echo "⚠️  Descarga falló. Reintentando con curl -k por posibles problemas de CRL/certificado…"
+      curl "${CURL_FLAGS[@]}" -k "$SPARK_TGZ_URL" | tar -xz -C "$PWD/.spark" || {
+        echo "🛑 No se pudo descargar Spark. Opciones:"
+        echo "   1) Exporta SPARK_ALLOW_INSECURE_DOWNLOAD=1 y reintenta."
+        echo "   2) Descarga manualmente ${SPARK_TGZ_URL} y descomprime en ${SPARK_DIR%/*}/"
+        exit 1
+      }
+    else
+      echo "🛑 No se pudo descargar Spark incluso con -k. Descarga manualmente ${SPARK_TGZ_URL} en ${SPARK_DIR%/*}/"
+      exit 1
+    fi
+  fi
 fi
 if [[ ! -d "$SPARK_DIR/jars" ]]; then
   echo "🛑 Spark mal descomprimido (no hay ${SPARK_DIR}/jars)."
