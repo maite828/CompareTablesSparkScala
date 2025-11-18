@@ -28,6 +28,7 @@ class SummaryGeneratorSpec extends AnyFlatSpec with Matchers with SparkSessionTe
       ignoreCols          = Seq.empty,
       initiativeName      = "unit",
       tablePrefix         = "unit_",
+      outputBucket        = "file:///tmp/compare-tests",
       checkDuplicates     = false,
       includeEqualsInDiff = false,
       autoCreateTables    = false,
@@ -35,11 +36,11 @@ class SummaryGeneratorSpec extends AnyFlatSpec with Matchers with SparkSessionTe
     )
 
     val summary = SummaryGenerator.generateSummaryTable(
-      spark, emptyDf, emptyDf, diffDf, dupDf, Seq("id"), emptyDf, emptyDf, cfg)
+      SummaryInputs(spark, emptyDf, emptyDf, diffDf, dupDf, Seq("id"))
+    )
 
-    summary.filter($"bloque" === "KPIS" && $"metrica" === "Total REF")
-      .select("numerador").as[String].collect().head
+    summary.filter($"block" === "KPIS" && $"metric" === "Total rows REF")
+      .select("numerator").as[String].collect().head
   }
 }
-
 

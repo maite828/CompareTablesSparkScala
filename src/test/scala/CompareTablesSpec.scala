@@ -60,6 +60,7 @@ class CompareTablesSpec extends AnyFlatSpec with Matchers with SparkSessionTestW
 
   private val keyCols     = Seq("id")
   private val compareCols = Seq("country", "amount", "status")
+  private val outputBucket = "file:///tmp/compare-tests"
 
   private val cfg = CompareConfig(
     spark               = spark,
@@ -70,6 +71,7 @@ class CompareTablesSpec extends AnyFlatSpec with Matchers with SparkSessionTestW
     ignoreCols          = Seq("last_update"),
     initiativeName      = "Swift",
     tablePrefix         = "unit_",
+    outputBucket        = outputBucket,
     checkDuplicates     = true,
     includeEqualsInDiff = false,
     autoCreateTables    = false,
@@ -79,7 +81,9 @@ class CompareTablesSpec extends AnyFlatSpec with Matchers with SparkSessionTestW
   // DataFrames resultado in‑memory
   private val diffDF = DiffGenerator.generateDifferencesTable(spark, refDF, newDF, keyCols, compareCols, includeEquals = false, cfg)
   private val dupDF  = DuplicateDetector.detectDuplicatesTable(spark, refDF, newDF, keyCols, cfg)
-  private val sumDF  = SummaryGenerator.generateSummaryTable(spark, refDF, newDF, diffDF, dupDF, keyCols, refDF, newDF, cfg)
+  private val sumDF  = SummaryGenerator.generateSummaryTable(
+    SummaryInputs(spark, refDF, newDF, diffDF, dupDF, keyCols)
+  )
 
   behavior of "Comparación End‑to‑End"
 
@@ -96,14 +100,15 @@ class CompareTablesSpec extends AnyFlatSpec with Matchers with SparkSessionTestW
   }
 
   it should "calcular métricas clave" in {
-    def num(m: String, u: String): Long = sumDF.filter($"metrica"===m && $"universo"===u).select($"numerador").as[String].head().toLong
-    num("IDs Uniques", "REF")  shouldEqual 10L
-    num("IDs Uniques", "NEW")  shouldEqual 8L
-    num("Total REF",   "ROWS") shouldEqual 13L
-    num("Total NEW",   "ROWS") shouldEqual 16L
+    def num(m: String, u: String): Long =
+      sumDF.filter($"metric"===m && $"universe"===u).select($"numerator").as[String].head().toLong
+    num("Unique IDs", "REF")  shouldEqual 10L
+    num("Unique IDs", "NEW")  shouldEqual 8L
+    num("Total rows REF",   "ROWS") shouldEqual 13L
+    num("Total rows NEW",   "ROWS") shouldEqual 16L
   }
 
   it should "mantener las 7 columnas del resumen" in {
-    sumDF.columns.toSeq.sorted shouldEqual Seq("bloque","denominador","ejemplos","metrica","numerador","pct","universo").sorted
+    sumDF.columns.toSeq.sorted shouldEqual Seq("block","denominator","metric","numerator","pct","samples","universe").sorted
   }
 }

@@ -1,6 +1,7 @@
 import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
 
 import java.math.BigDecimal
+import java.io.File
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
@@ -86,6 +87,7 @@ object Main {
       else {
         // Datos hardcode en modo local
         val jexecutionDateISO = "2025-07-01"
+        val localOutputBucket = new File("spark-warehouse/local-output").toURI.toString.stripSuffix("/")
         s"""
            |{
            |  "parameters": {
@@ -96,6 +98,7 @@ object Main {
            |    "ignoreCols": ["last_update"],
            |    "initiativeName": "Swift",
            |    "tablePrefix": "default.result_",
+           |    "outputBucket": "$localOutputBucket",
            |    "checkDuplicates": true,
            |    "includeEqualsInDiff": false,
            |    "executionDate": "$jexecutionDateISO"
@@ -115,8 +118,12 @@ object Main {
       .map(_.asText()).filter(_.nonEmpty)
       .getOrElse(throw new IllegalArgumentException("""Missing "executionDate" in parameters"""))
 
+    val defaultOutputBucket = new File("spark-warehouse/local-output").toURI.toString.stripSuffix("/")
+    val outputBucket = Option(params0.get("outputBucket")).map(_.asText()).filter(_.nonEmpty).getOrElse(defaultOutputBucket)
+
     // Reescribe tokens/placeholder de fecha y construye partitionSpec final si aplica
-    val (params, partitionSpecOpt) = PartitionFormatTool.normalizeParameters(params0, executionDateISO)
+    val (params: JsonNode, partitionSpecOpt: Option[String]) =
+      PartitionFormatTool.normalizeParameters(params0, executionDateISO)
     println(s"[DEBUG] partitionSpec (normalized): ${partitionSpecOpt.getOrElse("<none>")}")
 
     // Campos normalizados
@@ -164,6 +171,7 @@ object Main {
       ignoreCols          = ignoreCols,
       initiativeName      = initiativeName,
       tablePrefix         = tablePrefix,
+      outputBucket        = outputBucket,
       checkDuplicates     = checkDuplicates,
       includeEqualsInDiff = includeEquals,
 
@@ -171,9 +179,10 @@ object Main {
       priorityCol         = None,
       aggOverrides        = Map.empty,
       nullKeyMatches      = true,
-
       // fecha que se escribirá en outputs
-      outputDateISO       = outputDateISO
+      outputDateISO       = outputDateISO,
+      refPartitionSpecOverride = None,
+      newPartitionSpecOverride = None
     )
 
     TableComparisonController.run(cfg)
@@ -331,4 +340,3 @@ object Main {
     spark.sql(q(prefix + "duplicates")).show(100, false)
   }
 }
-

@@ -1,6 +1,7 @@
 
 import org.apache.spark.sql.SparkSession
 import java.time.LocalDate
+import java.io.File
 
 // Supported aggregation types for overrides
 sealed trait AggType
@@ -20,7 +21,7 @@ final case class CompareConfig(
                                 ignoreCols: Seq[String],                       // columns to ignore
                                 initiativeName: String,                        // label
                                 tablePrefix: String,                           // "default.result_"
-                                outputBucket: String,                          // "s3a://my-bucket/results/"
+                                outputBucket: String = new File("spark-warehouse/results").toURI.toString.stripSuffix("/"), // "s3a://my-bucket/results/"
                                 checkDuplicates: Boolean = false,
                                 includeEqualsInDiff: Boolean = false,
                                 autoCreateTables: Boolean = true,
@@ -38,4 +39,3 @@ final case class CompareConfig(
                                 refPartitionSpecOverride: Option[String] = None,
                                 newPartitionSpecOverride: Option[String] = None
                               )
-

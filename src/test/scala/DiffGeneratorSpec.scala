@@ -30,6 +30,7 @@ class DiffGeneratorSpec extends AnyFlatSpec with Matchers with SparkSessionTestW
       ignoreCols          = Seq.empty,
       initiativeName      = "",
       tablePrefix         = "",
+      outputBucket        = "file:///tmp/compare-tests",
       checkDuplicates     = false,
       includeEqualsInDiff = true,
       autoCreateTables    = false,
@@ -64,10 +65,9 @@ class DiffGeneratorSpec extends AnyFlatSpec with Matchers with SparkSessionTestW
         (idStr, colName, refValue, newValue, resultTag)
       }.toSet
 
-    // OJO: la implementación actual devuelve "ONLY_IN_NEW" cuando SOLO existe en ref
     val expected = Set(
       ("1", "col", "a", "b", "NO_MATCH"),
-      ("2", "col", "x", "-", "ONLY_IN_NEW")
+      ("2", "col", "x", "-", "ONLY_IN_REF")
     )
 
     got shouldEqual expected

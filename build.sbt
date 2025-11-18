@@ -10,7 +10,9 @@ ThisBuild / fork := true
 ThisBuild / javaOptions ++= Seq(
   "-Dhadoop.home.dir=/tmp/hadoop-dummy",
   "--add-opens=java.base/java.lang=ALL-UNNAMED",
-  "--add-opens=java.base/java.io=ALL-UNNAMED"
+  "--add-opens=java.base/java.io=ALL-UNNAMED",
+  "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED",
+  "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
 )
 
 lazy val root = (project in file("."))
