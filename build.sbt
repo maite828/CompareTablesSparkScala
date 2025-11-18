@@ -1,4 +1,3 @@
-// build.sbt — proyecto ÚNICO, JAR “thin” (Spark/Hadoop/Hive en "provided")
 import sbt._
 import Keys._
 import sbtassembly.AssemblyPlugin
@@ -19,15 +18,9 @@ lazy val root = (project in file("."))
   .settings(
     name := "CompareTablesProject",
     publish / skip := true,
-
-    // Main class
     Compile / run / mainClass := Some("Main"),
     assembly / mainClass := (Compile / run / mainClass).value,
-
-    // Nombre del jar que esperan tus scripts/Makefile
     assembly / assemblyJarName := "compare-assembly.jar",
-
-    // Dependencias: Spark/Hadoop/Hive en provided (thin JAR)
     libraryDependencies ++= Seq(
       "org.apache.spark" %% "spark-core" % "3.5.0" % "provided",
       "org.apache.spark" %% "spark-sql"  % "3.5.0" % "provided",
@@ -37,16 +30,13 @@ lazy val root = (project in file("."))
       "com.typesafe.play" %% "play-json"   % "2.9.4",
       "com.norbitltd"     %% "spoiwo"      % "1.7.0" exclude("org.scala-lang.modules","scala-xml_2.12"),
       "com.crealytics"    %% "spark-excel" % "0.13.5",
-      "org.scalatest"     %% "scalatest"   % "3.2.15" % Test
+      "org.scalatest"     %% "scalatest"   % "3.2.15" % Test,
+
+      // Jackson for JsonNode etc.
+      "com.fasterxml.jackson.core" % "jackson-databind" % "2.15.0"
     ),
-
-    // Forzar scala-xml de Spark para evitar conflictos
     dependencyOverrides += "org.scala-lang.modules" %% "scala-xml" % "2.1.0",
-
-    // No abortar por evictions (solo warning)
     evictionErrorLevel := Level.Warn,
-
-    // Merge strategy: eliminar firmas/MANIFEST problemáticos
     assembly / assemblyMergeStrategy := {
       case PathList("META-INF", xs @ _*) =>
         xs.map(_.toLowerCase) match {

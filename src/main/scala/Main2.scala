@@ -1,6 +1,3 @@
-
-package com.santander.cib.adhc.internal_aml_tools
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 
@@ -15,21 +12,21 @@ object Main2 extends Logging {
 
   def main(args: Array[String]): Unit = {
     // ---- Traza de argumentos (log + println) ----
-    logger.info("Arguments received:")
+    log.info("Arguments received:")
     println("Arguments received:")
     if (args != null) {
       args.zipWithIndex.foreach { case (arg, idx) =>
-        logger.info(s"  Arg[$idx]: $arg")
+        log.info(s"  Arg[$idx]: $arg")
         println(s"  Arg[$idx]: $arg")
       }
     } else {
-      logger.info("  <null args>")
+      log.info("  <null args>")
       println("  <null args>")
     }
 
     if (isKvMode(args)) {
       // -------------------- KV MODE (único soportado) --------------------
-      logger.info("Detected KV mode (key=value arguments).")
+      log.info("Detected KV mode (key=value arguments).")
       println("Detected KV mode (key=value arguments).")
 
       val spark = SparkSession.getActiveSession.getOrElse(
@@ -38,14 +35,14 @@ object Main2 extends Logging {
       val properties = new Properties()
 
       // Pasamos los args tal cual a la app del comparador
-      new AppSelection().getApp(args, "TableComparatorApp")(spark, properties)
+      //new AppSelection().getApp(args, "TableComparatorApp")(spark, properties)
 
-      logger.info("Process completed successfully (KV mode).")
+      log.info("Process completed successfully (KV mode).")
       println("Process completed successfully (KV mode).")
 
     } else {
       // -------------------- LEGACY MODE (sin cambios) --------------------
-      logger.info("KV mode not detected. Falling back to legacy mode.")
+      log.info("KV mode not detected. Falling back to legacy mode.")
       println("KV mode not detected. Falling back to legacy mode.")
 
       if (args == null || args.length < 3) {
@@ -55,7 +52,7 @@ object Main2 extends Logging {
             "  refTable=db.table newTable=db.table initiativeName=swift tablePrefix=default.resutados_ " +
             "  outputBucket=s3a://bucket/path executionDate=yyyy-MM-dd partitionSpec=geo=*/data_date_part=YYYY-MM-dd/ " +
             "  compositeKeyCols=id ignoreCols=last_update checkDuplicates=true includeEqualsInDiff=false"
-        logger.error(msg)
+        log.error(msg)
         println(msg)
         sys.exit(1)
       }
@@ -63,7 +60,7 @@ object Main2 extends Logging {
       val (spark, properties) = ImplicitContext.initialize(args(0))
       new AppSelection().getApp(args, args(1))(spark, properties)
 
-      logger.info("Process completed successfully (legacy mode).")
+      log.info("Process completed successfully (legacy mode).")
       println("Process completed successfully (legacy mode).")
     }
   }

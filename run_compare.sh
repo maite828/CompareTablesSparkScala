@@ -23,7 +23,7 @@ java -version 2>&1 | head -n1
 
 # -------- Build thin jar --------
 echo "🎯 Construyendo thin jar (assembly)…"
-sbt clean assembly
+"/c/Program Files (x86)/sbt/bin/sbt.bat" clean assembly
 
 JAR_PATH="target/scala-2.12/compare-assembly.jar"
 [[ -f "$JAR_PATH" ]] || { echo "🛑 No existe $JAR_PATH"; exit 1; }
@@ -32,8 +32,33 @@ JAR_PATH="target/scala-2.12/compare-assembly.jar"
 if [[ ! -d "$SPARK_DIR/jars" ]]; then
   echo "⬇️  Descargando Spark ${SPARK_VERSION}…"
   mkdir -p "$PWD/.spark"
-  curl -fL "$SPARK_TGZ_URL" | tar -xz -C "$PWD/.spark"
+
+  # Detectar si estamos en Windows (Git Bash/MINGW)
+  if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]]; then
+    echo "🪟 Detectado Windows, usando PowerShell para descargar..."
+    powershell.exe -Command "
+      try {
+        Write-Host 'Descargando Spark...'
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri '$SPARK_TGZ_URL' -OutFile '.spark/spark.tgz' -UseBasicParsing
+        Write-Host 'Descarga completada'
+      } catch {
+        Write-Host 'Error en descarga: ' \$_.Exception.Message
+        exit 1
+      }
+    "
+    if [[ -f ".spark/spark.tgz" ]]; then
+      tar -xzf ".spark/spark.tgz" -C "$PWD/.spark"
+      rm ".spark/spark.tgz"
+    else
+      echo "🛑 Error: No se pudo descargar Spark"
+      exit 1
+    fi
+  else
+    curl -fL "$SPARK_TGZ_URL" | tar -xz -C "$PWD/.spark"
+  fi
 fi
+
 if [[ ! -d "$SPARK_DIR/jars" ]]; then
   echo "🛑 Spark mal descomprimido (no hay ${SPARK_DIR}/jars)."
   exit 1
@@ -51,3 +76,4 @@ echo "📦 Ejecutando spark-submit con $JAR_PATH"
   --conf spark.sql.catalogImplementation=hive \
   --conf spark.ui.enabled=false \
   "$JAR_PATH"
+  

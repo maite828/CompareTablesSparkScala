@@ -1,117 +1,159 @@
-// src/main/scala/DuplicateDetector.scala
-// (sin package)
-
-import org.apache.spark.sql.{DataFrame, SparkSession, Encoders, Column, Row}
+import ComparatorDefaults.{HashNullToken, HashSeparator, Sha256Bits}
+import org.apache.spark.sql.{Column, DataFrame, Encoders, SparkSession}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.StringType
-import CompareConfig._
 
-/** Fila de salida de la tabla de duplicados */
 case class DuplicateOut(
-  origin: String,            // "ref" | "new"
-  id: String,                // clave compuesta concatenada (o "NULL")
-  exact_duplicates: String,  // total - countDistinct(hash)
-  dups_w_variations: String, // max(countDistinct(hash) - 1, 0)
-  occurrences: String,       // total del grupo
-  variations: String         // "col: [v1,v2] | ..."
-)
+                         origin: String,                // "ref" | "new"
+                         id: String,                    // composite key or "NULL"
+                         exact_duplicates: String,      // total - countDistinct(hash)
+                         dupes_w_variations: String,    // max(countDistinct(hash) - 1, 0)
+                         occurrences: String,           // group total
+                         variations: String             // "field: [v1,v2] | ..."
+                       )
 
 object DuplicateDetector {
 
-  /** Detecta duplicados exactos y con variaciones por origen y clave compuesta. */
+  // Constants for hashing/NULL-safe
+  private val NullToken = HashNullToken
+
+  /**
+   * Detect duplicates (exact and with variations) on each side independently.
+   * - If config.priorityCol is defined and present, within each (_src + keys) partition we keep
+   *   the row with highest priority (desc_nulls_last) to avoid counting intra-partition noise.
+   * - Row hash is built null-safely across all columns (except `_src`), using a stable separator.
+   * - Variation lists are deterministically ordered (array_sort) for stable outputs.
+   */
   def detectDuplicatesTable(
-      spark: SparkSession,
-      refDf: DataFrame,
-      newDf: DataFrame,
-      compositeKeyCols: Seq[String],
-      config: CompareConfig
-  ): DataFrame = {
+                             spark: SparkSession,
+                             refDf: DataFrame,
+                             newDf: DataFrame,
+                             compositeKeyCols: Seq[String],
+                             config: CompareConfig
+                           ): DataFrame = {
     import spark.implicits._
 
-    // 0) Normalizar claves vacías a NULL para agrupar correctamente
-    val normKey: Column => Column = c => when(trim(c.cast(StringType)) === "", lit(null)).otherwise(c)
-    val nRef = compositeKeyCols.foldLeft(refDf)((df, k) => df.withColumn(k, normKey(col(k))))
-    val nNew = compositeKeyCols.foldLeft(newDf)((df, k) => df.withColumn(k, normKey(col(k))))
+    // Union both sides labeling the origin; schema must match (unionByName).
+    val withSrc = unionWithOrigin(refDf, newDf)
 
-    // 1) Unir y etiquetar origen
-    val withSrc = nRef.withColumn("_src", lit("ref"))
-      .unionByName(nNew.withColumn("_src", lit("new")))
+    // Apply optional priority policy (keep top-1 per (_src + keys)).
+    val base = applyPriorityIf(config, withSrc, compositeKeyCols)
 
-    // 2) Si hay priorityCol, quedarnos con fila ranking = 1 por (_src + claves)
-    val base = {
-      val maybeCol = config.priorityCol.flatMap { c =>
-        Option(c).map(_.trim).filter(_.nonEmpty).filter(withSrc.columns.contains)
-      }
-      maybeCol match {
-        case Some(prio) =>
-          val w = Window
-            .partitionBy(("_src" +: compositeKeyCols).map(col): _*)
-            .orderBy(col(prio).desc_nulls_last)
-          withSrc.withColumn("_rn", row_number().over(w))
-                 .filter(col("_rn") === 1)
-                 .drop("_rn")
-        case None => withSrc
-      }
+    // Determine non-key columns once.
+    val nonKeys = nonKeyColumns(base, compositeKeyCols)
+
+    // Compute a null-safe row hash excluding `_src`.
+    val hashed = withRowHash(base)
+
+    // Aggregate per (origin + keys) to compute counts and collect variation sets.
+    val grouped = aggregateByGroup(hashed, compositeKeyCols, nonKeys)
+
+    // Select columns for output (including canonical ID).
+    val selected = selectForOutput(grouped, compositeKeyCols, nonKeys)
+
+    // Map to the final DTO, formatting variation text.
+    selected.map(rowToDuplicateOut(_, nonKeys))(Encoders.product[DuplicateOut]).toDF()
+  }
+
+  // ─────────────────────────── Helpers ───────────────────────────
+
+  // Add `_src` column distinguishing ref/new sides, then union by name.
+  private def unionWithOrigin(refDf: DataFrame, newDf: DataFrame): DataFrame =
+    refDf.withColumn("_src", lit("ref"))
+      .unionByName(newDf.withColumn("_src", lit("new")))
+
+  // If `priorityCol` exists, keep top-1 per (_src + keys) with desc_nulls_last ordering.
+  private def applyPriorityIf(config: CompareConfig, df: DataFrame, keys: Seq[String]): DataFrame = {
+    config.priorityCol match {
+      case Some(prio) if df.columns.contains(prio) =>
+        val w = Window.partitionBy(("_src" +: keys).map(col): _*).orderBy(col(prio).desc_nulls_last)
+        df.withColumn("_rn", row_number().over(w)).filter(col("_rn") === 1).drop("_rn")
+      case _ => df
     }
+  }
 
-    // 3) Columnas no clave (excluye _src)
-    val nonKeyCols = base.columns.filterNot(c => c == "_src" || compositeKeyCols.contains(c))
+  // Non-key columns (excludes `_src` and composite keys).
+  private def nonKeyColumns(df: DataFrame, keys: Seq[String]): Seq[String] =
+    df.columns.filterNot(c => c == "_src" || keys.contains(c))
 
-    // 4) Hash estable por fila (sin _src), ordenando columnas para evitar variaciones
-    val colsForHash = base.columns.filter(_ != "_src").sorted
-    val hashCol = sha2(
-      concat_ws("§", colsForHash.map { c =>
-        coalesce(col(c).cast(StringType), lit("__NULL__"))
-      }: _*),
-      256
-    )
-    val hashed = base.withColumn("_row_hash", hashCol)
+  /**
+   * Add null-safe `_row_hash` built from every column except `_src`.
+   * We cast every field to string and replace NULLs with a fixed token to make the hash stable.
+   */
+  private def withRowHash(df: DataFrame): DataFrame = {
+    val colsForHash = df.columns.filter(_ != "_src").map { c =>
+      // Keep empty strings as-is (changing it would alter semantics); only NULL becomes NullToken.
+      coalesce(col(c).cast(StringType), lit(NullToken))
+    }
+    val hashCol = sha2(concat_ws(HashSeparator, colsForHash: _*), Sha256Bits)
+    df.withColumn("_row_hash", hashCol)
+  }
 
-    // 5) Agregación por (_src + claves)
-    val aggExprs = Seq(
+  /**
+   * Group by origin + keys. Compute:
+   *  - occurrences (rows in group)
+   *  - exact_dup = total - countDistinct(_row_hash)
+   *  - var_dup   = max(countDistinct(_row_hash) - 1, 0)
+   *  - For each non-key column, collect_set of values (null-safe via previous cast) and sort arrays
+   *    to make output deterministic.
+   */
+  private def aggregateByGroup(hashed: DataFrame, keys: Seq[String], nonKeys: Seq[String]): DataFrame = {
+    // Base metrics
+    val baseAggs: Seq[Column] = Seq(
       count(lit(1)).as("occurrences"),
-      (count(lit(1)) - countDistinct(col("_row_hash"))).as("exact_dup"),
-      greatest(lit(0), countDistinct(col("_row_hash")) - lit(1)).as("var_dup")
-    ) ++ nonKeyCols.map { c =>
-      collect_set(coalesce(col(c).cast(StringType), lit("__NULL__"))).as(s"${c}_set")
-    }
+      (count(lit(1)) - countDistinct("_row_hash")).as("exact_dup"),
+      greatest(lit(0), countDistinct("_row_hash") - lit(1)).as("var_dup")
+    )
 
-    val grouped = hashed
-      .groupBy(("_src" +: compositeKeyCols).map(col): _*)
-      .agg(aggExprs.head, aggExprs.tail: _*)
+    // Deterministic variation sets per non-key column
+    val variationAggs: Seq[Column] =
+      nonKeys.map { c =>
+        array_sort(collect_set(coalesce(col(c).cast(StringType), lit(NullToken)))).as(s"${c}_set")
+      }
+
+    hashed
+      .groupBy((col("_src") +: keys.map(col)): _*)
+      .agg((baseAggs ++ variationAggs).head, (baseAggs ++ variationAggs).tail: _*)
       .filter(col("occurrences") > 1)
+  }
 
-    // 6) Selección de columnas base + sets de variaciones
+  // Select final columns and build a NULL-safe composite ID for the key.
+  private def selectForOutput(grouped: DataFrame, keys: Seq[String], nonKeys: Seq[String]): DataFrame = {
+    val idCol =
+      concat_ws("_", keys.map(k => coalesce(col(k).cast(StringType), lit("NULL"))): _*).as("id")
+
     val baseCols: Seq[Column] = Seq(
       col("_src").as("origin"),
-      concat_ws("_", compositeKeyCols.map(k => coalesce(col(k).cast(StringType), lit("NULL"))): _*).as("id"),
+      idCol,
       col("exact_dup"),
       col("var_dup"),
       col("occurrences")
     )
-    val variationCols: Seq[Column] = nonKeyCols.map(c => col(s"${c}_set"))
 
-    // 7) Map a DuplicateOut con construcción de texto de variaciones
-    grouped
-      .select((baseCols ++ variationCols): _*)
-      .map { row =>
-        val origin = row.getAs[String]("origin")
-        val id     = row.getAs[String]("id")
-        val exact  = row.getAs[Long]("exact_dup").toString
-        val varV   = row.getAs[Long]("var_dup").toString
-        val occ    = row.getAs[Long]("occurrences").toString
+    val variationCols: Seq[Column] = nonKeys.map(c => col(s"${c}_set"))
+    grouped.select((baseCols ++ variationCols): _*)
+  }
 
-        val vars = nonKeyCols.flatMap { c =>
-          val setColName = s"${c}_set"
-          val seqVals = Option(row.getAs[Seq[String]](setColName)).getOrElse(Seq.empty)
-            .filterNot(_ == "__NULL__").distinct
-          if (seqVals.size > 1) Some(s"$c: [${seqVals.mkString(",")}]") else None
-        }.mkString(" | ")
+  // Build output DTO from a grouped row; format variations as "col: [v1,v2] | ..." (skip NullToken).
+  private def rowToDuplicateOut(row: org.apache.spark.sql.Row, nonKeys: Seq[String]): DuplicateOut = {
+    val origin = row.getAs[String]("origin")
+    val id = row.getAs[String]("id")
+    val exact = row.getAs[Long]("exact_dup").toString
+    val vdup = row.getAs[Long]("var_dup").toString
+    val occ = row.getAs[Long]("occurrences").toString
 
-        val variationsText = if (vars.isEmpty) "-" else vars
-        DuplicateOut(origin, id, exact, varV, occ, variationsText)
-      }(Encoders.product[DuplicateOut])
-      .toDF()
+    val variationsText = buildVariationsText(row, nonKeys)
+    DuplicateOut(origin, id, exact, vdup, occ, variationsText)
+  }
+
+  // Render deterministic variations text, ignoring the special NullToken.
+  private def buildVariationsText(row: org.apache.spark.sql.Row, nonKeys: Seq[String]): String = {
+    val parts = nonKeys.flatMap { c =>
+      val arr = Option(row.getAs[Seq[String]](s"${c}_set")).getOrElse(Seq.empty)
+      val cleaned = arr.filterNot(_ == NullToken).distinct
+      if (cleaned.size > 1) Some(s"$c: [${cleaned.mkString(",")}]") else None
+    }
+    if (parts.isEmpty) "-" else parts.mkString(" | ")
   }
 }

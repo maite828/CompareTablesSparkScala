@@ -1,318 +1,323 @@
-// src/main/scala/TableComparisonController.scala
-// (sin package)
-
-import java.time.LocalDate
-import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.storage.StorageLevel
 
-object TableComparisonController {
+import java.time.LocalDate
 
-  /** DataFrames alineados para comparar. */
-  private final case class Frames(ref: DataFrame, neu: DataFrame)
+/**
+ * Orchestrates the end-to-end comparison workflow (lean controller).
+ * Notes:
+ *  - We force Metastore Parquet → DataSource scans to avoid HiveTableReader serialization issues.
+ *  - We assert physical plans are FileScan (not HiveTableScan) before heavy ops and before writing to sinks.
+ */
 
-  /** Dependencias necesarias para el resumen. */
-  private final case class SummaryDeps(
-    diff: DataFrame,
-    dups: DataFrame,
-    rawRef: DataFrame,
-    rawNew: DataFrame
-  )
+object TableComparisonController extends Logging {
 
-  // --------------------------------------------------------------------------------------
+  // lightweight double-logging
+  private def logInfo(msg: String): Unit = { log.info(msg); println(msg) }
+  private def logWarn(msg: String): Unit = { log.warn(msg); println(msg) }
 
+  // Minimal DTO used by this file
+  private final case class Prep(
+                                 rawRef: DataFrame,
+                                 rawNew: DataFrame,
+                                 refDf: DataFrame,
+                                 newDf: DataFrame,
+                                 colsToCompare: Seq[String]
+                               )
+
+  // ─────────────────────────── Entry point ───────────────────────────
   def run(config: CompareConfig): Unit = {
-    import config._
-    val session = spark
+    val spark = config.spark
 
-    configurePerformance(session)
+    // Make sure DataSource readers are enabled before any table() is materialized
+    enableFileSourceReaders(spark)
 
-    if (autoCreateTables)
-      ensureResultTables(
-        session,
-        s"$tablePrefix" + "differences",
-        s"$tablePrefix" + "summary",
-        s"$tablePrefix" + "duplicates"
+    // Clear any cached plan that could contain stale Hive scans
+    spark.catalog.clearCache()
+
+    ensureTablesIfNeeded(config)
+    // Verify the three sink tables are DataSource Parquet (or missing, in which case we will create)
+    verifySinksAreDatasource(config)
+
+    val executionDate = resolveExecutionDate(config.partitionSpec, config.outputDateISO)
+    logInfo(s"[DEBUG] Date for outputs (data_date_part): $executionDate")
+
+    val prep      = loadAndPrepare(
+      spark,
+      config.refTable,
+      config.newTable,
+      config.partitionSpec,
+      config.compositeKeyCols,
+      config.ignoreCols,
+      // overrides por lado (nuevos)
+      config.refPartitionSpecOverride,
+      config.newPartitionSpecOverride
+    )
+    val diffDf    = computeAndWriteDifferences(config, prep, executionDate)
+    val dupRead   = computeWriteAndReadDuplicates(config, prep, executionDate)
+    val summaryDf = computeAndWriteSummary(config, prep, diffDf, dupRead, executionDate)
+
+    exportExcelIfRequested(summaryDf, config.exportExcelPath)
+    cleanup(prep, diffDf, dupRead, summaryDf, config.checkDuplicates)
+  }
+
+  // ─────────────────────────── Control plane ───────────────────────────
+  private def ensureTablesIfNeeded(config: CompareConfig): Unit = {
+    if (config.autoCreateTables) {
+      val p = config.tablePrefix
+      TableIO.ensureResultTables(
+        config.spark,
+        s"${p}differences",
+        s"${p}summary",
+        s"${p}duplicates",
+        config
       )
-
-    // 1) Fecha a sellar en outputs: primero config.outputDateISO, si no derive de partitionSpec
-    val executionDate: String =
-      Option(outputDateISO).map(_.trim).filter(_.nonEmpty)
-        .getOrElse(extractExecutionDate(partitionSpec))
-    println(s"[DEBUG] Fecha para outputs (data_date_part): $executionDate")
-
-    // 2) Carga y preparación
-    val prep = loadAndPrepare(
-      session, refTable, newTable, partitionSpec, compositeKeyCols, ignoreCols
-    )
-
-    // 3) Diferencias
-    val diffDf = computeDifferences(
-      session, prep.refDf, prep.newDf,
-      compositeKeyCols, prep.colsToCompare, includeEqualsInDiff, config
-    )
-    writeResult(
-      s"${tablePrefix}differences",
-      diffDf,
-      Seq("id","column","value_ref","value_new","results"),
-      initiativeName,
-      executionDate
-    )
-
-    // 4) Duplicados (ahora recibe executionDate)
-    val dupRead = handleDuplicates(
-      session, checkDuplicates, tablePrefix, compositeKeyCols,
-      prep.refDf, prep.newDf, config, executionDate
-    )
-
-    // 5) Resumen
-    val frames = Frames(prep.refDf, prep.newDf)
-    val deps   = SummaryDeps(diffDf, dupRead, prep.rawRef, prep.rawNew)
-    val summaryDf = computeSummary(frames, deps, config)
-
-    writeResult(
-      s"${tablePrefix}summary",
-      summaryDf,
-      Seq("bloque","metrica","universo","numerador","denominador","pct","ejemplos"),
-      initiativeName,
-      executionDate
-    )
-
-    // 6) Export opcional
-    exportExcelPath.foreach(path => SummaryGenerator.exportToExcel(summaryDf, path))
-
-    // 7) Limpieza de cachés
-    prep.refDf.unpersist(); prep.newDf.unpersist()
-    if (checkDuplicates) dupRead.unpersist()
-    diffDf.unpersist(); summaryDf.unpersist()
+    }
   }
 
-  // ─────────────────────────── Helpers de orquestación ───────────────────────────
-
-  private def configurePerformance(session: SparkSession): Unit = {
-    session.conf.set("spark.sql.shuffle.partitions", "100")
-    session.sparkContext.setCheckpointDir("/tmp/checkpoints")
-    session.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
-    session.conf.set("hive.exec.dynamic.partition", "true")
-    session.conf.set("hive.exec.dynamic.partition.mode", "nonstrict")
+  /** Best-effort check that sink tables resolve to DataSource scans. */
+  private def verifySinksAreDatasource(config: CompareConfig): Unit = {
+    val spark = config.spark
+    val sinks = Seq(
+      s"${config.tablePrefix}differences",
+      s"${config.tablePrefix}summary",
+      s"${config.tablePrefix}duplicates"
+    )
+    sinks.foreach { t =>
+      if (spark.catalog.tableExists(t)) {
+        // Will throw with a clear message if it resolves to HiveTableScan/HadoopTableReader
+        assertDatasourceTable(spark, t)
+      } else {
+        logWarn(s"[CONF] Sink table '$t' does not exist yet; it will be created on first write.")
+      }
+    }
   }
 
-  /** Fallback si no viene outputDateISO en config. */
+  private def resolveExecutionDate(partitionSpec: Option[String], configuredISO: String): String =
+    Option(configuredISO).map(_.trim).filter(_.nonEmpty).getOrElse(extractExecutionDate(partitionSpec))
+
   private def extractExecutionDate(partitionSpec: Option[String]): String = {
-    val isoRegex    = "[A-Za-z0-9_]+\\s*=\\s*\"([0-9]{4}-[0-9]{2}-[0-9]{2})\"".r
-    val tripleRegex = "[A-Za-z0-9_]+\\s*=\\s*\"([0-9]{2})\"\\s*/\\s*[A-Za-z0-9_]+\\s*=\\s*\"([0-9]{2})\"\\s*/\\s*[A-Za-z0-9_]+\\s*=\\s*\"([0-9]{4})\"".r
+    val isoRx =
+      "[A-Za-z0-9_]+\\s*=\\s*\\\"([0-9]{4}-[0-9]{2}-[0-9]{2})\\\"".r
+    val tripleRx =
+      "[A-Za-z0-9_]+\\s*=\\s*\\\"([0-9]{2})\\\"\\s*/\\s*[A-Za-z0-9_]+\\s*=\\s*\\\"([0-9]{2})\\\"\\s*/\\s*[A-Za-z0-9_]+\\s*=\\s*\\\"([0-9]{4})\\\"".r
     partitionSpec
       .flatMap { spec =>
-        isoRegex.findFirstMatchIn(spec).map(_.group(1))
-          .orElse(tripleRegex.findFirstMatchIn(spec).map(m => s"${m.group(3)}-${m.group(2)}-${m.group(1)}"))
+        isoRx.findFirstMatchIn(spec).map(_.group(1))
+          .orElse(tripleRx.findFirstMatchIn(spec).map(m => s"${m.group(3)}-${m.group(2)}-${m.group(1)}"))
       }
       .getOrElse(LocalDate.now().toString)
   }
 
-  private final case class Prep(
-    rawRef: DataFrame,
-    rawNew: DataFrame,
-    refDf: DataFrame,
-    newDf: DataFrame,
-    colsToCompare: Seq[String]
-  )
+  // ─────────────────────────── Main stages ───────────────────────────
+  private def computeAndWriteDifferences(config: CompareConfig, prep: Prep, executionDate: String): DataFrame = {
+    val diffDf = ComparisonBuilders.computeDifferences(
+      config.spark,
+      prep.refDf,
+      prep.newDf,
+      config.compositeKeyCols,
+      prep.colsToCompare,
+      config.includeEqualsInDiff,
+      config
+    )
+    writeResult(
+      s"${config.tablePrefix}differences",
+      diffDf,
+      Seq("id", "column", "value_ref", "value_new", "results"),
+      config.initiativeName,
+      executionDate
+    )
+    diffDf
+  }
 
-  /** Carga tablas (filtrando por partitionSpec si aplica) y prepara columnas a comparar. */
+  private def computeWriteAndReadDuplicates(config: CompareConfig, prep: Prep, executionDate: String): DataFrame = {
+    if (config.checkDuplicates) {
+      val dupDf = ComparisonBuilders.computeDuplicates(
+        config.spark,
+        prep.refDf,
+        prep.newDf,
+        config.compositeKeyCols,
+        config
+      )
+      writeResult(
+        s"${config.tablePrefix}duplicates",
+        dupDf,
+        Seq("origin","id","exact_duplicates","dupes_w_variations","occurrences","variations"),
+        config.initiativeName,
+        executionDate
+      )
+      // Read back and assert the plan is also a FileScan (sink must be DataSource)
+      val dupRead = config.spark.table(s"${config.tablePrefix}duplicates")
+      assertFileSource(dupRead, s"[sink-read] ${config.tablePrefix}duplicates")
+      dupRead
+    } else {
+      config.spark.emptyDataFrame
+    }
+  }
+
+  private def computeAndWriteSummary(
+                                      config: CompareConfig,
+                                      prep: Prep,
+                                      diffDf: DataFrame,
+                                      dupRead: DataFrame,
+                                      executionDate: String
+                                    ): DataFrame = {
+    val inputs = SummaryInputs(
+      config.spark,
+      prep.refDf,
+      prep.newDf,
+      diffDf,
+      dupRead,
+      config.compositeKeyCols
+    )
+
+    val summaryDf = SummaryGenerator.generateSummaryTable(inputs)
+    writeResult(
+      s"${config.tablePrefix}summary",
+      summaryDf,
+      Seq("block","metric","universe","numerator","denominator","pct","samples"),
+      config.initiativeName,
+      executionDate
+    )
+    summaryDf
+  }
+
+  private def exportExcelIfRequested(summaryDf: DataFrame, target: Option[String]): Unit =
+    target.foreach(path => SummaryGenerator.exportToExcel(summaryDf, path))
+
+  private def cleanup(
+                       prep: Prep,
+                       diffDf: DataFrame,
+                       dupRead: DataFrame,
+                       summaryDf: DataFrame,
+                       hadDup: Boolean
+                     ): Unit = {
+    // unpersist is no-op if not cached
+    prep.rawRef.unpersist(blocking = true)
+    prep.rawNew.unpersist(blocking = true)
+    prep.refDf.unpersist(blocking = true)
+    prep.newDf.unpersist(blocking = true)
+    if (hadDup) dupRead.unpersist(blocking = true)
+    diffDf.unpersist(blocking = true)
+    summaryDf.unpersist(blocking = true)
+  }
+
+  // ─────────────────────────── Load & prep ───────────────────────────
   private def loadAndPrepare(
-    spark: SparkSession,
-    refTable: String,
-    newTable: String,
-    partitionSpec: Option[String],
-    compositeKeyCols: Seq[String],
-    ignoreCols: Seq[String]
-  ): Prep = {
-    val rawRef = loadWithPartition(spark, refTable, partitionSpec)
-    val rawNew = loadWithPartition(spark, newTable, partitionSpec)
+                              spark: SparkSession,
+                              refTable: String,
+                              newTable: String,
+                              partitionSpec: Option[String],
+                              compositeKeyCols: Seq[String],
+                              ignoreCols: Seq[String],
+                              refPartitionSpecOverride: Option[String],   // NEW
+                              newPartitionSpecOverride: Option[String]    // NEW
+                            ): Prep = {
 
-    val partitionKeys =
-      partitionSpec.map(_.split("/").map(_.split("=", 2)(0).trim).toSet).getOrElse(Set.empty[String])
+    // Decidir spec por lado (precedencia: override > global)
+    val refSpec = refPartitionSpecOverride.orElse(partitionSpec)
+    val newSpec = newPartitionSpecOverride.orElse(partitionSpec)
 
-    val colsToCompare = rawRef.columns.toSeq
-      .filterNot(ignoreCols.contains)
-      .filterNot(partitionKeys.contains)
-      .filterNot(compositeKeyCols.contains)
+    // Read with partition pruning
+    val rawRef = PartitionPruning.loadWithPartition(spark, refTable, refSpec)
+    val rawNew = PartitionPruning.loadWithPartition(spark, newTable, newSpec)
 
-    val neededCols = compositeKeyCols ++ colsToCompare
+    // Defensive: ensure FileScan (datasource) and not HiveTableScan
+    assertFileSource(rawRef, s"ref=$refTable")
+    assertFileSource(rawNew, s"new=$newTable")
 
-    val refDf = rawRef
-      .select(neededCols.map(col): _*)
-      .repartition(100, compositeKeyCols.map(col): _*)
+    logInfo(s"[DEBUG] after partition filter: refCols=${rawRef.columns.length}, newCols=${rawNew.columns.length}")
+    PrepUtils.logFilteredInputFiles(rawRef, newDf = rawNew, info = logInfo)
+
+    val schemaReport = SchemaChecker.analyze(rawRef, rawNew)
+    SchemaChecker.log(schemaReport, logInfo, logWarn)
+
+    val colsToCompare = PrepUtils.computeColsToCompare(rawRef, partitionSpec, ignoreCols, compositeKeyCols)
+    val neededCols    = compositeKeyCols ++ colsToCompare
+
+    val nParts = PrepUtils.pickTargetPartitions(spark)
+    logInfo(s"[DEBUG] repartition(nParts=$nParts, keys=${compositeKeyCols.mkString(",")})")
+
+    val refDf = PrepUtils
+      .selectAndRepartition(rawRef, neededCols, compositeKeyCols, nParts)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
-    val newDf = rawNew
-      .select(neededCols.map(col): _*)
-      .repartition(100, compositeKeyCols.map(col): _*)
+    val newDf = PrepUtils
+      .selectAndRepartition(rawNew, neededCols, compositeKeyCols, nParts)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
     Prep(rawRef, rawNew, refDf, newDf, colsToCompare)
   }
 
-  /** Manejo de duplicados (compute + write + read persistido), con fecha explícita. */
-  private def handleDuplicates(
-    spark: SparkSession,
-    enabled: Boolean,
-    tablePrefix: String,
-    compositeKeyCols: Seq[String],
-    refDf: DataFrame,
-    newDf: DataFrame,
-    config: CompareConfig,
-    executionDate: String
-  ): DataFrame = {
-    if (!enabled) spark.emptyDataFrame
-    else {
-      val dupDf = computeDuplicates(spark, refDf, newDf, compositeKeyCols, config)
-      writeResult(
-        s"${tablePrefix}duplicates",
-        dupDf,
-        Seq("origin","id","exact_duplicates","dups_w_variations","occurrences","variations"),
-        config.initiativeName,
-        executionDate
-      )
-      spark.table(s"${tablePrefix}duplicates").persist(StorageLevel.MEMORY_AND_DISK)
+  // ─────────────────────────── Write helpers ───────────────────────────
+  private def writeResult(
+                           tableName: String,
+                           df: DataFrame,
+                           columns: Seq[String],
+                           initiative: String,
+                           executionDate: String
+                         ): Unit = {
+    val spark = df.sparkSession
+
+    // Pre-flight: if the sink table exists, ensure it resolves to a FileScan
+    if (spark.catalog.tableExists(tableName)) {
+      assertDatasourceTable(spark, tableName)
+    } else {
+      logWarn(s"[CONF] Sink '$tableName' does not exist yet; it will be created (IF NOT EXISTS already attempted).")
+    }
+
+    val out = df
+      .select(columns.map(col): _*)
+      .withColumn("initiative", lit(initiative))
+      .withColumn("data_date_part", lit(executionDate))
+      .coalesce(1) // keep a small number of files per partition for result tables
+
+    logInfo(s"[DEBUG] writeResult: insertInto($tableName)")
+    out.write.mode(SaveMode.Overwrite).insertInto(tableName)
+  }
+
+  // ─────────────────────────── Source enforcement ───────────────────────────
+  /** Make sure Spark uses DataSource (FileScan) for metastore Parquet/ORC tables. */
+  private def enableFileSourceReaders(spark: SparkSession): Unit = {
+    // Do this before any spark.table(...) is materialized
+    spark.conf.set("spark.sql.hive.convertMetastoreParquet", "true")
+    spark.conf.set("spark.sql.hive.convertMetastoreOrc", "true")
+    // Nice-to-have for inserts into partitioned result tables
+    spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+    spark.conf.set("hive.exec.dynamic.partition", "true")
+    spark.conf.set("hive.exec.dynamic.partition.mode", "nonstrict")
+
+    val convParquet = spark.conf.get("spark.sql.hive.convertMetastoreParquet")
+    val convOrc     = spark.conf.get("spark.sql.hive.convertMetastoreOrc")
+    logInfo(s"[CONF] convertMetastoreParquet=$convParquet, convertMetastoreOrc=$convOrc")
+  }
+
+  /**
+   * Asserts the physical plan is a FileScan (datasource), not a HiveTableScan/HadoopTableReader.
+   * If Hive scan is detected, we fail fast with a clear message.
+   */
+  private def assertFileSource(df: DataFrame, label: String): Unit = {
+    val plan = df.queryExecution.executedPlan.toString()
+    val isHive = plan.contains("HiveTableScanExec") || plan.contains("HadoopTableReader")
+    if (isHive) {
+      val msg =
+        s"""[ERROR] '$label' is being read through Hive SerDe reader (HiveTableScan/HadoopTableReader).
+           |This can trigger 'Task not serializable' in PRE.
+           |Ensure:
+           |  - spark.sql.hive.convertMetastoreParquet=true (we set it at start)
+           |  - Table is created as 'USING parquet' (drop & recreate if needed).
+           |Physical plan:
+           |$plan
+           |""".stripMargin
+      throw new IllegalStateException(msg)
     }
   }
 
-  // ─────────────────────────── Cálculos ───────────────────────────
-
-  private def computeDifferences(
-    spark: SparkSession,
-    refDf: DataFrame,
-    newDf: DataFrame,
-    compositeKeyCols: Seq[String],
-    colsToCompare: Seq[String],
-    includeEqualsInDiff: Boolean,
-    config: CompareConfig,
-    persistLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK
-  ): DataFrame = {
-    val df = DiffGenerator.generateDifferencesTable(
-      spark, refDf, newDf,
-      compositeKeyCols, colsToCompare,
-      includeEqualsInDiff, config
-    )
-    df.persist(persistLevel)
-  }
-
-  private def computeDuplicates(
-    spark: SparkSession,
-    refDf: DataFrame,
-    newDf: DataFrame,
-    compositeKeyCols: Seq[String],
-    config: CompareConfig,
-    persistLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK
-  ): DataFrame = {
-    val df = DuplicateDetector.detectDuplicatesTable(
-      spark, refDf, newDf, compositeKeyCols, config
-    )
-    df.persist(persistLevel)
-  }
-
-  private def computeSummary(
-    frames: Frames,
-    deps: SummaryDeps,
-    config: CompareConfig
-  ): DataFrame = {
-    val spark = config.spark
-    val df = SummaryGenerator.generateSummaryTable(
-      spark,
-      frames.ref, frames.neu,
-      deps.diff, deps.dups,
-      config.compositeKeyCols,
-      deps.rawRef, deps.rawNew,
-      config
-    )
-    df.persist(StorageLevel.MEMORY_AND_DISK)
-  }
-
-  // ─────────────────────────── Utilidades ───────────────────────────
-
-  private def ensureResultTables(
-  spark: SparkSession,
-  diffTable: String,
-  summaryTable: String,
-  duplicatesTable: String
-  ): Unit = {
-    spark.sql(
-      s"""
-        |CREATE TABLE IF NOT EXISTS $diffTable (
-        |  id STRING,
-        |  `column` STRING,
-        |  value_ref STRING,
-        |  value_new STRING,
-        |  results STRING
-        |)
-        |PARTITIONED BY (initiative STRING, data_date_part STRING)
-        |STORED AS PARQUET
-      """.stripMargin)
-
-    spark.sql(
-      s"""
-        |CREATE TABLE IF NOT EXISTS $summaryTable (
-        |  bloque STRING,
-        |  metrica STRING,
-        |  universo STRING,
-        |  numerador STRING,
-        |  denominador STRING,
-        |  pct STRING,
-        |  ejemplos STRING
-        |)
-        |PARTITIONED BY (initiative STRING, data_date_part STRING)
-        |STORED AS PARQUET
-      """.stripMargin)
-
-    spark.sql(
-      s"""
-        |CREATE TABLE IF NOT EXISTS $duplicatesTable (
-        |  origin STRING,
-        |  id STRING,
-        |  exact_duplicates STRING,
-        |  dups_w_variations STRING,
-        |  occurrences STRING,
-        |  variations STRING
-        |)
-        |PARTITIONED BY (initiative STRING, data_date_part STRING)
-        |STORED AS PARQUET
-      """.stripMargin)
-  }
-
-
-  private def loadWithPartition(
-    spark: SparkSession,
-    tableName: String,
-    partitionSpec: Option[String]
-  ): DataFrame = {
-    val base = spark.table(tableName)
-    partitionSpec.getOrElse("")
-      .split("/")
-      .foldLeft(base) { (df, kv) =>
-        val parts = kv.split("=", 2)
-        if (parts.length == 2) {
-          val k = parts(0).trim
-          val v = parts(1).replace("\"", "")
-          if (df.columns.contains(k)) df.filter(col(k) === lit(v)) else df
-        } else df
-      }
-  }
-
-  private def writeResult(
-    tableName: String,
-    df: DataFrame,
-    columns: Seq[String],
-    initiative: String,
-    executionDate: String
-  ): Unit = {
-    val out = df.select(columns.map(col): _*)
-      .withColumn("initiative", lit(initiative))
-      .withColumn("data_date_part", lit(executionDate))
-      .repartition(col("initiative"), col("data_date_part"))
-
-    // Con partitionOverwriteMode=dynamic, overwrite sólo las particiones afectadas.
-    out.write
-      .mode(SaveMode.Overwrite)
-      .insertInto(tableName)
+  /** Assert an existing catalog table resolves to a FileScan (not HiveTableScan). */
+  private def assertDatasourceTable(spark: SparkSession, tableName: String): Unit = {
+    val df = spark.table(tableName).limit(1) // cheap read; enough to inspect executedPlan
+    assertFileSource(df, s"[sink-check] $tableName")
   }
 }

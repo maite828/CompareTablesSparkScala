@@ -1,0 +1,24 @@
+{
+    "AMLTOOLS_initiative_alias":"AML-INTERNAL-TOOLS",
+    "AMLTOOLS_job_name": "aml_internal_tools",
+    "AMLTOOLS_preferences": ["azure_databricks_v2", "cloudera"],
+    "AMLTOOLS_size": "S",
+    "AMLTOOLS_config_storage":"s3a://scib-pro-pr-config/aml/conf/cib-adhc-internaltools",
+    "AMLTOOLS_check_retry_time": 300,
+    "AMLTOOLS_sleep_secs": 90,
+
+    "AMLTOOLS_tables_comparator_swift": {
+        "refTable": "scib_cm_cmplnc_trans_messages_swift_s3.swift_transactions",
+        "newTable": "scib_bu_cmplnc_trans_messages_swift_s3.swift_transactions_new",
+        "initiativeName": "swift",
+        "tablePrefix": "scib_bu_cmplnc_trans_messages_swift_s3.results_",
+        "outputBucket": "s3a://scib-pro-bu-aml/internal-tools",
+        "partitionSpec": "data_date_part=YYYY-MM-dd/",
+        "refWindowDays": "0..0",
+        "newWindowDays": "0..0",
+        "compositeKeyCols": ["geo","uetr","type","in_out","message_type","validation_type","rejected"],
+        "ignoreCols": ["session_sequence","message_type_reference","message_type_reference_Id","original_message","data_timestamp_part"],
+        "checkDuplicates": true,
+        "includeEqualsInDiff": true
+    }
+}

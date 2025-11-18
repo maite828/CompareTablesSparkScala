@@ -14,7 +14,7 @@ case "$UNAME_OUT" in
 esac
 
 # ───────────────────────────────────────────────────────────────────────────────
-# 1) Selección de JAVA_HOME
+# 1) Selección de JAVA_HOME (arreglado para Windows)
 # ───────────────────────────────────────────────────────────────────────────────
 if $is_macos; then
   # Forzar JDK 17 en macOS (Spark/Hadoop friendly)
@@ -27,11 +27,35 @@ if $is_macos; then
   export PATH="$JAVA_HOME/bin:$PATH"
   echo "🍎 macOS → usando JAVA_HOME=$JAVA_HOME"
 elif $is_windows_gitbash; then
-  # En Windows (Git Bash) no tocamos JAVA_HOME; usas el que tengas configurado
-  if [[ -z "${JAVA_HOME:-}" ]]; then
-    echo "🪟 Windows (Git Bash) → JAVA_HOME no definido, usará el que resuelva sbt."
-  else
+  # Buscar una instalación válida de Java en PATH.
+  JAVA_HOME=""
+  JAVA_EXEC_LIST=($(where java 2>/dev/null || type -p java))
+  JAVA_FOUND=false
+  for JAVA_EXEC in "${JAVA_EXEC_LIST[@]}"; do
+    JAVA_DIR="$(dirname "$JAVA_EXEC")"
+    JAVA_BASE="$(dirname "$JAVA_DIR")"
+    if [[ -x "$JAVA_BASE/bin/java.exe" || -x "$JAVA_BASE/bin/java" ]]; then
+      JAVA_HOME="$JAVA_BASE"
+      JAVA_FOUND=true
+      break
+    fi
+  done
+
+  # Si no hay una JAVA válida en PATH, intentar con la ruta de IntelliJ (como mencionaste)
+  if ! $JAVA_FOUND && [[ -x "/c/Program Files/Java/jdk-11/bin/java.exe" ]]; then
+    JAVA_HOME="/c/Program Files/Java/jdk-11"
+    JAVA_FOUND=true
+    echo "🪟 Usando JAVA_HOME de IntelliJ: $JAVA_HOME"
+  fi
+
+  if $JAVA_FOUND; then
+    export JAVA_HOME
+    export PATH="$JAVA_HOME/bin:$PATH"
     echo "🪟 Windows (Git Bash) → usando JAVA_HOME=$JAVA_HOME"
+  else
+    echo "🛑 No se encontró JDK válido en PATH ni en IntelliJ."
+    echo "Instala un JDK y asegúrate que su carpeta bin está en el PATH."
+    exit 1
   fi
 else
   # Otras plataformas: no forzamos nada
