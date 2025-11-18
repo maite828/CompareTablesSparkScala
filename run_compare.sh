@@ -90,6 +90,20 @@ if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == mingw* ]]; then
   mkdir -p "$HADOOP_DUMMY_WIN"/bin
   export HADOOP_HOME="$HADOOP_DUMMY_WIN"
   export hadoop_home_dir="$HADOOP_DUMMY_WIN"
+  # Asegura winutils.exe si está disponible en el bundle
+  WINUTILS_TARGET="$HADOOP_DUMMY_WIN/bin/winutils.exe"
+  if [[ ! -f "$WINUTILS_TARGET" ]]; then
+    for candidate in \
+      "$SPARK_HOME/bin/winutils.exe" \
+      "$PWD/.spark/winutils.exe" \
+      "$PWD/winutils.exe"; do
+      if [[ -f "$candidate" ]]; then
+        cp "$candidate" "$WINUTILS_TARGET"
+        break
+      fi
+    done
+  fi
+  export PATH="$HADOOP_HOME/bin:$PATH"
 fi
 
 # -------- Build thin jar --------
@@ -151,9 +165,12 @@ fi
 
 SPARK_SUBMIT_BIN="$SPARK_HOME/bin/spark-submit"
 if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == mingw* ]]; then
-  # Usa el script .cmd para evitar dependencias de ps/cygpath en bash
+  # Usa el script .cmd y convierte rutas a formato Windows
   SPARK_HOME_WIN="$(cygpath -m "$SPARK_HOME")"
+  HADOOP_HOME_WIN="$(cygpath -m "${HADOOP_HOME:-$HADOOP_DUMMY_WIN}")"
   export SPARK_HOME="$SPARK_HOME_WIN"
+  export HADOOP_HOME="$HADOOP_HOME_WIN"
+  export hadoop_home_dir="$HADOOP_HOME_WIN"
   SPARK_SUBMIT_BIN="$SPARK_HOME/bin/spark-submit.cmd"
 fi
 
