@@ -53,7 +53,9 @@ object TableComparisonController extends Logging {
       config.ignoreCols,
       // overrides por lado (nuevos)
       config.refPartitionSpecOverride,
-      config.newPartitionSpecOverride
+      config.newPartitionSpecOverride,
+      config.refFilter,
+      config.newFilter
     )
     val diffDf    = computeAndWriteDifferences(config, prep, executionDate)
     val dupRead   = computeWriteAndReadDuplicates(config, prep, executionDate)
@@ -213,7 +215,9 @@ object TableComparisonController extends Logging {
                               compositeKeyCols: Seq[String],
                               ignoreCols: Seq[String],
                               refPartitionSpecOverride: Option[String],   // NEW
-                              newPartitionSpecOverride: Option[String]    // NEW
+                              newPartitionSpecOverride: Option[String],    // NEW
+                              refFilter: Option[String],
+                              newFilter: Option[String]
                             ): Prep = {
 
     // Decidir spec por lado (precedencia: override > global)
@@ -224,32 +228,45 @@ object TableComparisonController extends Logging {
     val rawRef = PartitionPruning.loadWithPartition(spark, refTable, refSpec)
     val rawNew = PartitionPruning.loadWithPartition(spark, newTable, newSpec)
 
+    // Optional per-side filters before any further processing
+    val filteredRef = applyOptionalFilter(rawRef, refFilter, "ref")
+    val filteredNew = applyOptionalFilter(rawNew, newFilter, "new")
+
     // Defensive: ensure FileScan (datasource) and not HiveTableScan
-    assertFileSource(rawRef, s"ref=$refTable")
-    assertFileSource(rawNew, s"new=$newTable")
+    assertFileSource(filteredRef, s"ref=$refTable")
+    assertFileSource(filteredNew, s"new=$newTable")
 
-    logInfo(s"[DEBUG] after partition filter: refCols=${rawRef.columns.length}, newCols=${rawNew.columns.length}")
-    PrepUtils.logFilteredInputFiles(rawRef, newDf = rawNew, info = logInfo)
+    logInfo(s"[DEBUG] after partition+where: refCols=${filteredRef.columns.length}, newCols=${filteredNew.columns.length}")
+    PrepUtils.logFilteredInputFiles(filteredRef, newDf = filteredNew, info = logInfo)
 
-    val schemaReport = SchemaChecker.analyze(rawRef, rawNew)
+    val schemaReport = SchemaChecker.analyze(filteredRef, filteredNew)
     SchemaChecker.log(schemaReport, logInfo, logWarn)
 
-    val colsToCompare = PrepUtils.computeColsToCompare(rawRef, partitionSpec, ignoreCols, compositeKeyCols)
+    val colsToCompare = PrepUtils.computeColsToCompare(filteredRef, partitionSpec, ignoreCols, compositeKeyCols)
     val neededCols    = compositeKeyCols ++ colsToCompare
 
     val nParts = PrepUtils.pickTargetPartitions(spark)
     logInfo(s"[DEBUG] repartition(nParts=$nParts, keys=${compositeKeyCols.mkString(",")})")
 
     val refDf = PrepUtils
-      .selectAndRepartition(rawRef, neededCols, compositeKeyCols, nParts)
+      .selectAndRepartition(filteredRef, neededCols, compositeKeyCols, nParts)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
     val newDf = PrepUtils
-      .selectAndRepartition(rawNew, neededCols, compositeKeyCols, nParts)
+      .selectAndRepartition(filteredNew, neededCols, compositeKeyCols, nParts)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
-    Prep(rawRef, rawNew, refDf, newDf, colsToCompare)
+    Prep(filteredRef, filteredNew, refDf, newDf, colsToCompare)
   }
+
+  /** Apply an optional SQL filter clause to a DF, logging the expression. */
+  private def applyOptionalFilter(df: DataFrame, filterExprOpt: Option[String], label: String): DataFrame =
+    filterExprOpt match {
+      case Some(expr) if expr.nonEmpty =>
+        logInfo(s"[DEBUG] Applying filter to $label: $expr")
+        df.filter(expr)
+      case _ => df
+    }
 
   // ─────────────────────────── Write helpers ───────────────────────────
   private def writeResult(

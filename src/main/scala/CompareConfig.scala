@@ -37,5 +37,9 @@ final case class CompareConfig(
 
                                 // NEW: per-side partition spec overrides (highest precedence over partitionSpec)
                                 refPartitionSpecOverride: Option[String] = None,
-                                newPartitionSpecOverride: Option[String] = None
+                                newPartitionSpecOverride: Option[String] = None,
+
+                                // NEW: optional filters per side (applied right after reading)
+                                refFilter: Option[String] = None,
+                                newFilter: Option[String] = None
                               )
