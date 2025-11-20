@@ -51,9 +51,7 @@ object TableComparisonController extends Logging {
       config.ignoreCols,
       // overrides por lado (nuevos)
       config.refPartitionSpecOverride,
-      config.newPartitionSpecOverride,
-      config.refFilter,
-      config.newFilter
+      config.newPartitionSpecOverride
     )
     val diffDf    = computeAndWriteDifferences(config, prep, executionDate)
     val dupRead   = computeWriteAndReadDuplicates(config, prep, executionDate)
@@ -213,15 +211,9 @@ object TableComparisonController extends Logging {
                               compositeKeyCols: Seq[String],
                               ignoreCols: Seq[String],
                               refPartitionSpecOverride: Option[String],   // NEW
-<<<<<<< HEAD
                               newPartitionSpecOverride: Option[String],   // NEW
                               refFilter: Option[String] = None,           // NEW
                               newFilter: Option[String] = None            // NEW
-=======
-                              newPartitionSpecOverride: Option[String],    // NEW
-                              refFilter: Option[String],
-                              newFilter: Option[String]
->>>>>>> 2eceda3718abf8db77a34119d993e65acb889113
                             ): Prep = {
 
     // Decidir spec por lado (precedencia: override > global)
@@ -240,7 +232,6 @@ object TableComparisonController extends Logging {
     assertFileSource(filteredRef, s"ref=$refTable")
     assertFileSource(filteredNew, s"new=$newTable")
 
-<<<<<<< HEAD
     // Log row counts before/after filtering
     if (refFilter.isDefined || newFilter.isDefined) {
       logInfo(s"[FILTER] Applying custom SQL filters:")
@@ -274,40 +265,21 @@ object TableComparisonController extends Logging {
     logInfo(s"[COLUMNS] → Comparing ${colsToCompare.length} common columns")
     logInfo(s"[COLUMNS] → Excluded: ${excludedCols} total (${compositeKeyCols.length} keys, ${ignoreCols.length} ignored, partition cols)")
     logInfo(s"[COLUMNS] → Comparison scope: Only columns present in BOTH tables will be compared")
-=======
-    logInfo(s"[DEBUG] after partition+where: refCols=${filteredRef.columns.length}, newCols=${filteredNew.columns.length}")
-    PrepUtils.logFilteredInputFiles(filteredRef, newDf = filteredNew, info = logInfo)
-
-    val schemaReport = SchemaChecker.analyze(filteredRef, filteredNew)
-    SchemaChecker.log(schemaReport, logInfo, logWarn)
-
-    val colsToCompare = PrepUtils.computeColsToCompare(filteredRef, partitionSpec, ignoreCols, compositeKeyCols)
-    val neededCols    = compositeKeyCols ++ colsToCompare
->>>>>>> 2eceda3718abf8db77a34119d993e65acb889113
 
     val nParts = PrepUtils.pickTargetPartitions(spark)
     logInfo(s"[DEBUG] repartition(nParts=$nParts, keys=${compositeKeyCols.mkString(",")})")
 
     val refDf = PrepUtils
-<<<<<<< HEAD
       .selectAndRepartition(filteredRef, neededColsRef, compositeKeyCols, nParts)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
     val newDf = PrepUtils
       .selectAndRepartition(filteredNew, neededColsNew, compositeKeyCols, nParts)
-=======
-      .selectAndRepartition(filteredRef, neededCols, compositeKeyCols, nParts)
-      .persist(StorageLevel.MEMORY_AND_DISK)
-
-    val newDf = PrepUtils
-      .selectAndRepartition(filteredNew, neededCols, compositeKeyCols, nParts)
->>>>>>> 2eceda3718abf8db77a34119d993e65acb889113
       .persist(StorageLevel.MEMORY_AND_DISK)
 
     Prep(filteredRef, filteredNew, refDf, newDf, colsToCompare)
   }
 
-<<<<<<< HEAD
   // Apply an optional SQL filter clause to a DF, logging the expression.
   private def applyOptionalFilter(df: DataFrame, filterExprOpt: Option[String], label: String): DataFrame =
     filterExprOpt match {
@@ -324,14 +296,6 @@ object TableComparisonController extends Logging {
           logInfo(s"[FILTER] ✓ Applied on '$label': $expr (lazy evaluation, count skipped)")
         }
         filtered
-=======
-  /** Apply an optional SQL filter clause to a DF, logging the expression. */
-  private def applyOptionalFilter(df: DataFrame, filterExprOpt: Option[String], label: String): DataFrame =
-    filterExprOpt match {
-      case Some(expr) if expr.nonEmpty =>
-        logInfo(s"[DEBUG] Applying filter to $label: $expr")
-        df.filter(expr)
->>>>>>> 2eceda3718abf8db77a34119d993e65acb889113
       case _ => df
     }
 
