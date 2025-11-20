@@ -1,9 +1,5 @@
 # AML Internal Tools - Table Comparison Engine
-
-[![CI Checks workflow](https://github.com/santander-group-scib-gln/cib-adhc-internaltools/actions/workflows/ci-checks.yml/badge.svg)](https://github.com/santander-group-scib-gln/cib-adhc-internaltools/actions/workflows/ci-checks.yml) [![Integration workflow](https://github.com/santander-group-scib-gln/cib-adhc-internaltools/actions/workflows/integration.yml/badge.svg)](https://github.com/santander-group-scib-gln/cib-adhc-internaltools/actions/workflows/integration.yml) [![Release workflow](https://github.com/santander-group-scib-gln/cib-adhc-internaltools/actions/workflows/release.yml/badge.svg)](https://github.com/santander-group-scib-gln/cib-adhc-internaltools/actions/workflows/release.yml) [![Deploy workflow](https://github.com/santander-group-scib-gln/cib-adhc-internaltools/actions/workflows/deploy.yml/badge.svg)](https://github.com/santander-group-scib-gln/cib-adhc-internaltools/actions/workflows/deploy.yml)
-
 **Version:** 1.0.5-SNAPSHOT | **Stack:** Scala 2.12.17 + Spark 3.5.0  
-**Deployment:** Object Storage | [Documentation](https://github.alm.europe.cloudcenter.corp/pages/cib-oasis-academy/oasis-academy/pipelines/object-storage/spark-java/)
 
 ---
 
