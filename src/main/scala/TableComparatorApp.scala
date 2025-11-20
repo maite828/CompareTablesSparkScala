@@ -137,6 +137,11 @@ class TableComparatorApp()(implicit spark: SparkSession) extends Logging {
     val refSpecOverride = refSpecDirect.orElse(refSpecWindow)
     val newSpecOverride = newSpecDirect.orElse(newSpecWindow)
 
+    // Optional per-side filters (Spark SQL expressions)
+    val refFilter = kv.get("refFilter").map(_.trim).filter(_.nonEmpty)
+    val newFilter = kv.get("newFilter").map(_.trim).filter(_.nonEmpty)
+    info(s"[DEBUG] refFilter: ${refFilter.getOrElse("<none>")}, newFilter: ${newFilter.getOrElse("<none>")}")
+
     CompareConfig(
       spark = spark,
       refTable = refTable,
@@ -154,7 +159,9 @@ class TableComparatorApp()(implicit spark: SparkSession) extends Logging {
       outputDateISO = outputDateISO,
       // nuevos campos:
       refPartitionSpecOverride = refSpecOverride,
-      newPartitionSpecOverride = newSpecOverride
+      newPartitionSpecOverride = newSpecOverride,
+      refFilter = refFilter,
+      newFilter = newFilter
     )
   }
 
