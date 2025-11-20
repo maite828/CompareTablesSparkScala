@@ -94,8 +94,8 @@ object SchemaChecker {
   def log(report: SchemaReport, info: String => Unit, warn: String => Unit): Unit = {
     logHeader(report, info)
     logOrder(report, info, warn)
-    logMissing(report, warn)
-    logTypeDiffs(report, warn)
+    logMissing(report, warn, info)
+    logTypeDiffs(report, warn, info)
     logSummary(report, info, warn)
   }
 
@@ -175,14 +175,16 @@ object SchemaChecker {
     (msgs.toSeq, total)
   }
 
-  private def logHeader(r: SchemaReport, info: String => Unit): Unit =
+  private def logHeader(r: SchemaReport, info: String => Unit): Unit = {
     info(s"[SCHEMA] REF cols=${r.refColCount} | NEW cols=${r.newColCount}")
+    info(s"[SCHEMA] ✓ Both tables have ${r.refColCount} total columns (including partitions)")
+  }
 
   private def logOrder(r: SchemaReport, info: String => Unit, warn: String => Unit): Unit = {
     if (r.orderMatches) {
-      info("[SCHEMA] Column order: OK (identical sequences).")
+      info("[SCHEMA] ✓ Column order: OK (identical sequences).")
     } else {
-      warn("[SCHEMA] Column order: MISMATCH.")
+      warn("[SCHEMA] ⚠ Column order: MISMATCH (non-critical - Spark compares by name, not position)")
       if (r.orderMismatches.nonEmpty) {
         val lines = r.orderMismatches.mkString("\n  - ")
         warn(s"[SCHEMA] First order differences (max $MaxOrderMismatchesToLog of ${r.orderMismatchesTotal}):\n  - $lines")
@@ -192,23 +194,33 @@ object SchemaChecker {
       } else if (r.orderMismatchesTotal > 0) {
         warn(s"[SCHEMA] Order differences: ${r.orderMismatchesTotal} (omitted from logs)")
       }
+      info("[SCHEMA] → Impact: NONE - Column order does not affect comparison logic")
     }
   }
 
-  private def logMissing(r: SchemaReport, warn: String => Unit): Unit = {
+  private def logMissing(r: SchemaReport, warn: String => Unit, info: String => Unit): Unit = {
     def logSide(tag: String, xs: Seq[String]): Unit = {
       if (xs.nonEmpty) {
         val head = xs.take(MaxMissingToLog)
-        warn(s"[SCHEMA] Columns only in $tag (${xs.size}): ${head.mkString(",")}${if (xs.size > head.size) s", ... (+${xs.size - head.size})" else ""}")
+        val isPartitionCol = head.exists(c => c.contains("partition") || c.contains("process_") || c == "geo" || c == "data_date_part")
+        val prefix = if (isPartitionCol) "✓" else "⚠"
+        warn(s"[SCHEMA] $prefix Columns only in $tag (${xs.size}): ${head.mkString(",")}${if (xs.size > head.size) s", ... (+${xs.size - head.size})" else ""}")
+        if (isPartitionCol) {
+          info(s"[SCHEMA] → Impact: Expected (partition columns) - These will NOT be compared")
+        } else {
+          info(s"[SCHEMA] → Impact: These columns will appear as ONLY_IN_$tag in differences table")
+        }
       }
     }
     logSide("REF", r.missingInNew)
     logSide("NEW", r.missingInRef)
   }
 
-  private def logTypeDiffs(r: SchemaReport, warn: String => Unit): Unit = {
+  private def logTypeDiffs(r: SchemaReport, warn: String => Unit, info: String => Unit): Unit = {
     if (r.typeDiffsTotal > 0) {
-      warn(s"[SCHEMA] Type/nullability/metadata differences (showing up to $MaxTypeDiffsToLog of ${r.typeDiffsTotal}):")
+      val onlyMetadata = r.typeDiffs.forall(_.issue == "metadata-mismatch")
+      val prefix = if (onlyMetadata) "⚠" else "❌"
+      warn(s"[SCHEMA] $prefix Type/nullability/metadata differences (showing up to $MaxTypeDiffsToLog of ${r.typeDiffsTotal}):")
       if (r.typeDiffs.nonEmpty) {
         val toShow = r.typeDiffs.map { d =>
           val nul = (d.refNullable, d.newNullable) match {
@@ -222,6 +234,20 @@ object SchemaChecker {
       if (r.typeDiffsTotal > r.typeDiffs.size) {
         warn(s"[SCHEMA] ... (${r.typeDiffsTotal - r.typeDiffs.size} additional type differences)")
       }
+      
+      // Explain impact
+      if (onlyMetadata) {
+        info("[SCHEMA] → Impact: MINIMAL - Only metadata differs (Hive comments, etc.), values will compare correctly")
+      } else {
+        val hasTypeMismatch = r.typeDiffs.exists(_.issue == "type-mismatch")
+        val hasNullableMismatch = r.typeDiffs.exists(_.issue == "nullable-mismatch")
+        if (hasTypeMismatch) {
+          warn("[SCHEMA] → Impact: CRITICAL - Type mismatches may cause comparison errors or incorrect results")
+        }
+        if (hasNullableMismatch) {
+          info("[SCHEMA] → Impact: MODERATE - Nullability differences may affect null handling in joins")
+        }
+      }
     }
   }
 
@@ -233,9 +259,21 @@ object SchemaChecker {
         r.typeDiffsTotal == 0
 
     if (identical) {
-      info("[SCHEMA] REF and NEW are IDENTICAL (names + order + types + nullability + metadata).")
+      info("[SCHEMA] ✓ REF and NEW are IDENTICAL (names + order + types + nullability + metadata).")
+      info("[SCHEMA] → Ready to compare: All columns will be compared")
     } else {
-      warn("[SCHEMA] Schema differences detected (see details above).")
+      // Calculate comparable columns
+      val commonCols = r.refColCount - r.missingInNew.size
+      val onlyMetadata = r.typeDiffsTotal > 0 && r.typeDiffs.forall(_.issue == "metadata-mismatch")
+      val critical = r.typeDiffs.exists(d => d.issue == "type-mismatch" || d.issue == "nullable-mismatch")
+      
+      if (critical) {
+        warn("[SCHEMA] ❌ CRITICAL schema differences detected - Review type/nullability mismatches above")
+      } else if (onlyMetadata || r.missingInNew.nonEmpty || r.missingInRef.nonEmpty || !r.orderMatches) {
+        warn("[SCHEMA] ⚠ Schema differences detected (see details above) - Non-critical, comparison will proceed")
+      }
+      
+      info(s"[SCHEMA] → Ready to compare: $commonCols common columns (excluding partition columns and mismatches)")
     }
   }
 }

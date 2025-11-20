@@ -229,8 +229,8 @@ object TableComparisonController extends Logging {
     val filteredNew = applyOptionalFilter(rawNew, newFilter, "new")
 
     // Defensive: ensure FileScan (datasource) and not HiveTableScan
-    assertFileSource(filteredRef, s"ref=$refTable")
-    assertFileSource(filteredNew, s"new=$newTable")
+    assertFileSource(rawRef, s"ref=$refTable")
+    assertFileSource(rawNew, s"new=$newTable")
 
     // Log row counts before/after filtering
     if (refFilter.isDefined || newFilter.isDefined) {
@@ -241,7 +241,7 @@ object TableComparisonController extends Logging {
 
     PrepUtils.logFilteredInputFiles(filteredRef, newDf = filteredNew, info = logInfo)
 
-    val schemaReport = SchemaChecker.analyze(filteredRef, filteredNew)
+    val schemaReport = SchemaChecker.analyze(rawRef, rawNew)
     SchemaChecker.log(schemaReport, logInfo, logWarn)
 
     // Compute columns to compare from REF (for backward compatibility)
@@ -262,6 +262,7 @@ object TableComparisonController extends Logging {
     val colsToCompare = colsToCompareRef.filter(c => refAvailableCols.contains(c) && newAvailableCols.contains(c))
     val excludedCols = compositeKeyCols.length + ignoreCols.length +
       (if (refSpec.isDefined) refSpec.get.split("/").length else 0)
+
     logInfo(s"[COLUMNS] → Comparing ${colsToCompare.length} common columns")
     logInfo(s"[COLUMNS] → Excluded: ${excludedCols} total (${compositeKeyCols.length} keys, ${ignoreCols.length} ignored, partition cols)")
     logInfo(s"[COLUMNS] → Comparison scope: Only columns present in BOTH tables will be compared")
@@ -277,7 +278,7 @@ object TableComparisonController extends Logging {
       .selectAndRepartition(filteredNew, neededColsNew, compositeKeyCols, nParts)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
-    Prep(filteredRef, filteredNew, refDf, newDf, colsToCompare)
+    Prep(rawRef, rawNew, refDf, newDf, colsToCompare)
   }
 
   // Apply an optional SQL filter clause to a DF, logging the expression.
