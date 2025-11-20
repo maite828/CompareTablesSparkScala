@@ -1,9 +1,11 @@
-import org.apache.spark.internal.Logging
-import org.apache.spark.sql.functions._
-import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
-import org.apache.spark.storage.StorageLevel
+
+import com.santander.cib.adhc.internal_aml_tools.util.PrepUtils
 
 import java.time.LocalDate
+import org.apache.logging.log4j.scala.Logging
+import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
+import org.apache.spark.sql.functions._
+import org.apache.spark.storage.StorageLevel
 
 /**
  * Orchestrates the end-to-end comparison workflow (lean controller).
@@ -11,12 +13,11 @@ import java.time.LocalDate
  *  - We force Metastore Parquet → DataSource scans to avoid HiveTableReader serialization issues.
  *  - We assert physical plans are FileScan (not HiveTableScan) before heavy ops and before writing to sinks.
  */
-
 object TableComparisonController extends Logging {
 
   // lightweight double-logging
-  private def logInfo(msg: String): Unit = { log.info(msg); println(msg) }
-  private def logWarn(msg: String): Unit = { log.warn(msg); println(msg) }
+  private def logInfo(msg: String): Unit = { logger.info(msg); println(msg) }
+  private def logWarn(msg: String): Unit = { logger.warn(msg); println(msg) }
 
   // Minimal DTO used by this file
   private final case class Prep(
@@ -53,9 +54,7 @@ object TableComparisonController extends Logging {
       config.ignoreCols,
       // overrides por lado (nuevos)
       config.refPartitionSpecOverride,
-      config.newPartitionSpecOverride,
-      config.refFilter,
-      config.newFilter
+      config.newPartitionSpecOverride
     )
     val diffDf    = computeAndWriteDifferences(config, prep, executionDate)
     val dupRead   = computeWriteAndReadDuplicates(config, prep, executionDate)
@@ -215,9 +214,9 @@ object TableComparisonController extends Logging {
                               compositeKeyCols: Seq[String],
                               ignoreCols: Seq[String],
                               refPartitionSpecOverride: Option[String],   // NEW
-                              newPartitionSpecOverride: Option[String],    // NEW
-                              refFilter: Option[String],
-                              newFilter: Option[String]
+                              newPartitionSpecOverride: Option[String],   // NEW
+                              refFilter: Option[String] = None,           // NEW
+                              newFilter: Option[String] = None            // NEW
                             ): Prep = {
 
     // Decidir spec por lado (precedencia: override > global)
@@ -233,37 +232,57 @@ object TableComparisonController extends Logging {
     val filteredNew = applyOptionalFilter(rawNew, newFilter, "new")
 
     // Defensive: ensure FileScan (datasource) and not HiveTableScan
-    assertFileSource(filteredRef, s"ref=$refTable")
-    assertFileSource(filteredNew, s"new=$newTable")
+    assertFileSource(rawRef, s"ref=$refTable")
+    assertFileSource(rawNew, s"new=$newTable")
 
-    logInfo(s"[DEBUG] after partition+where: refCols=${filteredRef.columns.length}, newCols=${filteredNew.columns.length}")
-    PrepUtils.logFilteredInputFiles(filteredRef, newDf = filteredNew, info = logInfo)
+    logInfo(s"[DEBUG] after partition+where: refCols=${filteredRef.columns.length}, newCols=${filteredNew.columns.length}" +
+      s" filter: refCols=${rawRef.columns.length}, newCols=${rawNew.columns.length}")
+    PrepUtils.logFilteredInputFiles(rawRef, newDf = rawNew, info = logInfo)
 
-    val schemaReport = SchemaChecker.analyze(filteredRef, filteredNew)
+    val schemaReport = SchemaChecker.analyze(rawRef, rawNew)
     SchemaChecker.log(schemaReport, logInfo, logWarn)
 
-    val colsToCompare = PrepUtils.computeColsToCompare(filteredRef, partitionSpec, ignoreCols, compositeKeyCols)
-    val neededCols    = compositeKeyCols ++ colsToCompare
+    // Compute columns to compare from REF (for backward compatibility)
+    val colsToCompareRef = PrepUtils.computeColsToCompare(rawRef, refSpec, ignoreCols, compositeKeyCols)
+    
+    // Get actual available columns from each DataFrame (only select columns that exist)
+    val refAvailableCols = rawRef.columns.toSet
+    val newAvailableCols = rawNew.columns.toSet
+    
+    // For each table, select: keys + columns that exist in that table
+    val neededColsRef = (compositeKeyCols ++ colsToCompareRef).filter(refAvailableCols.contains).distinct
+    val neededColsNew = (compositeKeyCols ++ colsToCompareRef).filter(newAvailableCols.contains).distinct
+    
+    logInfo(s"[COLUMNS] ✓ REF selecting ${neededColsRef.length} cols (${compositeKeyCols.length} keys + ${neededColsRef.length - compositeKeyCols.length} data)")
+    logInfo(s"[COLUMNS] ✓ NEW selecting ${neededColsNew.length} cols (${compositeKeyCols.length} keys + ${neededColsNew.length - compositeKeyCols.length} data)")
+    
+    // Columns to actually compare: intersection of both after filtering
+    val colsToCompare = colsToCompareRef.filter(c => refAvailableCols.contains(c) && newAvailableCols.contains(c))
+    val excludedCols = compositeKeyCols.length + ignoreCols.length + 
+                       (if (refSpec.isDefined) refSpec.get.split("/").length else 0)
+    logInfo(s"[COLUMNS] → Comparing ${colsToCompare.length} common columns")
+    logInfo(s"[COLUMNS] → Excluded: ${excludedCols} total (${compositeKeyCols.length} keys, ${ignoreCols.length} ignored, partition cols)")
+    logInfo(s"[COLUMNS] → Comparison scope: Only columns present in BOTH tables will be compared")
 
     val nParts = PrepUtils.pickTargetPartitions(spark)
     logInfo(s"[DEBUG] repartition(nParts=$nParts, keys=${compositeKeyCols.mkString(",")})")
 
     val refDf = PrepUtils
-      .selectAndRepartition(filteredRef, neededCols, compositeKeyCols, nParts)
+      .selectAndRepartition(rawRef, neededColsRef, compositeKeyCols, nParts)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
     val newDf = PrepUtils
-      .selectAndRepartition(filteredNew, neededCols, compositeKeyCols, nParts)
+      .selectAndRepartition(rawNew, neededColsNew, compositeKeyCols, nParts)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
-    Prep(filteredRef, filteredNew, refDf, newDf, colsToCompare)
+    Prep(rawRef, rawNew, refDf, newDf, colsToCompare)
   }
 
-  /** Apply an optional SQL filter clause to a DF, logging the expression. */
+  // Apply an optional SQL filter clause to a DF, logging the expression.
   private def applyOptionalFilter(df: DataFrame, filterExprOpt: Option[String], label: String): DataFrame =
     filterExprOpt match {
       case Some(expr) if expr.nonEmpty =>
-        logInfo(s"[DEBUG] Applying filter to $label: $expr")
+        logInfo(s"[DEBUG] Applying filter on '$label': $expr")
         df.filter(expr)
       case _ => df
     }
