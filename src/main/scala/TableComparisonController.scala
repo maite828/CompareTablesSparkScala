@@ -1,5 +1,6 @@
+
 import java.time.LocalDate
-import org.apache.spark.internal.Logging
+import org.apache.logging.log4j.scala.Logging
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.storage.StorageLevel
@@ -229,8 +230,8 @@ object TableComparisonController extends Logging {
     val filteredNew = applyOptionalFilter(rawNew, newFilter, "new")
 
     // Defensive: ensure FileScan (datasource) and not HiveTableScan
-    assertFileSource(rawRef, s"ref=$refTable")
-    assertFileSource(rawNew, s"new=$newTable")
+    assertFileSource(filteredRef, s"ref=$refTable")
+    assertFileSource(filteredNew, s"new=$newTable")
 
     // Log row counts before/after filtering
     if (refFilter.isDefined || newFilter.isDefined) {
@@ -238,31 +239,30 @@ object TableComparisonController extends Logging {
       if (refFilter.isDefined) logInfo(s"[FILTER]   REF: ${refFilter.get}")
       if (newFilter.isDefined) logInfo(s"[FILTER]   NEW: ${newFilter.get}")
     }
-
+    
     PrepUtils.logFilteredInputFiles(filteredRef, newDf = filteredNew, info = logInfo)
 
-    val schemaReport = SchemaChecker.analyze(rawRef, rawNew)
+    val schemaReport = SchemaChecker.analyze(filteredRef, filteredNew)
     SchemaChecker.log(schemaReport, logInfo, logWarn)
 
     // Compute columns to compare from REF (for backward compatibility)
     val colsToCompareRef = PrepUtils.computeColsToCompare(filteredRef, refSpec, ignoreCols, compositeKeyCols)
-
+    
     // Get actual available columns from each DataFrame (only select columns that exist)
     val refAvailableCols = filteredRef.columns.toSet
     val newAvailableCols = filteredNew.columns.toSet
-
+    
     // For each table, select: keys + columns that exist in that table
     val neededColsRef = (compositeKeyCols ++ colsToCompareRef).filter(refAvailableCols.contains).distinct
     val neededColsNew = (compositeKeyCols ++ colsToCompareRef).filter(newAvailableCols.contains).distinct
-
+    
     logInfo(s"[COLUMNS] ✓ REF selecting ${neededColsRef.length} cols (${compositeKeyCols.length} keys + ${neededColsRef.length - compositeKeyCols.length} data)")
     logInfo(s"[COLUMNS] ✓ NEW selecting ${neededColsNew.length} cols (${compositeKeyCols.length} keys + ${neededColsNew.length - compositeKeyCols.length} data)")
-
+    
     // Columns to actually compare: intersection of both after filtering
     val colsToCompare = colsToCompareRef.filter(c => refAvailableCols.contains(c) && newAvailableCols.contains(c))
-    val excludedCols = compositeKeyCols.length + ignoreCols.length +
-      (if (refSpec.isDefined) refSpec.get.split("/").length else 0)
-
+    val excludedCols = compositeKeyCols.length + ignoreCols.length + 
+                       (if (refSpec.isDefined) refSpec.get.split("/").length else 0)
     logInfo(s"[COLUMNS] → Comparing ${colsToCompare.length} common columns")
     logInfo(s"[COLUMNS] → Excluded: ${excludedCols} total (${compositeKeyCols.length} keys, ${ignoreCols.length} ignored, partition cols)")
     logInfo(s"[COLUMNS] → Comparison scope: Only columns present in BOTH tables will be compared")
@@ -278,7 +278,7 @@ object TableComparisonController extends Logging {
       .selectAndRepartition(filteredNew, neededColsNew, compositeKeyCols, nParts)
       .persist(StorageLevel.MEMORY_AND_DISK)
 
-    Prep(rawRef, rawNew, refDf, newDf, colsToCompare)
+    Prep(filteredRef, filteredNew, refDf, newDf, colsToCompare)
   }
 
   // Apply an optional SQL filter clause to a DF, logging the expression.
@@ -288,7 +288,7 @@ object TableComparisonController extends Logging {
         val beforeCount = try { df.count() } catch { case _: Throwable => -1L }
         val filtered = df.filter(expr)
         val afterCount = try { filtered.count() } catch { case _: Throwable => -1L }
-
+        
         if (beforeCount >= 0 && afterCount >= 0) {
           val filtered_pct = if (beforeCount > 0) f"${afterCount.toDouble / beforeCount * 100}%.2f" else "0.00"
           logInfo(s"[FILTER] ✓ Applied on '$label': $expr")
