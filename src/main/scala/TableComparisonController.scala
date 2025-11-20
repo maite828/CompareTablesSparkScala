@@ -1,6 +1,7 @@
 
+import org.apache.spark.internal.Logging
+
 import java.time.LocalDate
-import org.apache.logging.log4j.scala.Logging
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.storage.StorageLevel
