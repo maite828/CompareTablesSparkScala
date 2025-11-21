@@ -1,6 +1,6 @@
-# AML Internal Tools - Table Comparison Engine
-**Version:** 1.0.5-SNAPSHOT | **Stack:** Scala 2.12.17 + Spark 3.5.0  
+# Internal Tools - Table Comparison Engine
 
+**Version:** 1.0.5-SNAPSHOT | **Stack:** Scala 2.12.17 + Spark 3.5.0
 ---
 
 # 🚀 Guía de Uso - Motor de Comparación de Tablas Spark
@@ -118,6 +118,7 @@ ORDER BY CAST(occurrences AS INT) DESC;
 | `ignoreCols` | - | Columnas a excluir de la comparación (CSV) | `ingestion_ts,audit_user,version` |
 | `checkDuplicates` | `false` | Activar análisis de duplicados | `true` |
 | `includeEqualsInDiff` | `false` | Incluir coincidencias (MATCH) en tabla differences | `false` |
+| `priorityCol` | - | Columna para resolver duplicados (mantiene valor más alto) | `update_timestamp`, `version` |
 
 ---
 
@@ -311,37 +312,204 @@ id="789", column="country", value_ref="ES", value_new="-", results="ONLY_IN_REF"
 
 ---
 
-### 3.2 Tabla duplicates - Vista Rápida
+### 3.2 Tabla duplicates - Análisis de Duplicados
 
-**¿Qué muestra?** Calidad de unicidad de cada clave en cada tabla (REF y NEW por separado).
+**¿Qué muestra?** Análisis exhaustivo de unicidad por clave compuesta, detectando duplicados exactos y con variaciones en cada tabla (REF y NEW).
+
+#### 3.2.1 Schema Completo
+
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `origin` | String | `"ref"` o `"new"` (tabla de origen) |
+| `id` | String | Clave compuesta (NULL-safe: valores NULL → "NULL") |
+| `category` | String | `"both"`, `"only_ref"`, o `"only_new"` (coherente con summary.DUPS) |
+| `exact_duplicates` | String | Número de **copias exactas** (mismo hash SHA256) |
+| `dupes_w_variations` | String | Número de **grupos con variaciones** (hashes distintos) |
+| `occurrences` | String | **Total de filas** con esta clave |
+| `variations` | String | **Detalle de variaciones**: `"campo: [val1,val2] \| campo2: [x,y]"` |
+
+#### 3.2.2 Interpretación de Métricas
+
+**Fórmulas:**
+```
+exact_duplicates    = occurrences - count(distinct _row_hash)
+dupes_w_variations  = max(0, count(distinct _row_hash) - 1)
+```
+
+**Escenarios típicos:**
+
+| Caso | occurrences | exact_dup | dupes_w_var | variations | Interpretación |
+|------|-------------|-----------|-------------|------------|----------------|
+| **A** | 1 | - | - | - | ✅ **No duplicado** (no aparece en tabla) |
+| **B** | 3 | 2 | 0 | `-` | 3 filas idénticas (copias exactas) |
+| **C** | 3 | 1 | 1 | `amount: [100,200]` | 2 filas iguales + 1 con amount diferente |
+| **D** | 5 | 0 | 4 | `status: [A,B,C,D,E]` | 5 filas todas distintas (máxima variación) |
+
+**Ejemplo real:**
+```
+origin="ref", id="TXN_123_CUST_456", category="both"
+exact_duplicates="2", dupes_w_variations="1", occurrences="4"
+variations="amount: [100.00,100.50] | status: [ACTIVE,PENDING]"
+
+→ Interpretación:
+  • 4 filas con esta clave en REF
+  • 2 copias exactas (mismo hash)
+  • 2 grupos con variaciones distintas
+  • Varían los campos: amount (2 valores) y status (2 valores)
+```
+
+#### 3.2.3 Columna `category` - Coherencia con Summary
+
+La columna `category` categoriza cada ID duplicado según su presencia en REF/NEW:
+
+| Category | Significado | Ejemplo |
+|----------|-------------|---------|
+| `both` | ID duplicado en **ambas** tablas | ID aparece 2+ veces en REF **Y** 2+ veces en NEW |
+| `only_ref` | ID duplicado **solo en REF** | ID aparece 2+ veces en REF pero 0 o 1 vez en NEW |
+| `only_new` | ID duplicado **solo en NEW** | ID aparece 2+ veces en NEW pero 0 o 1 vez en REF |
+
+**Coherencia con `summary.DUPS`:**
+```sql
+-- Ambos reportan las mismas categorías con los mismos criterios
+SELECT category, COUNT(DISTINCT id) FROM duplicates GROUP BY category;
+-- ↓ coincide con ↓
+SELECT metric, numerator FROM summary WHERE block = 'DUPS';
+```
+
+#### 3.2.4 Queries Útiles
 
 ```sql
--- Ver duplicados problemáticos (con variaciones)
-SELECT origin, id, occurrences, dupes_w_variations, variations
+-- 1. Ver solo duplicados problemáticos (con variaciones)
+SELECT origin, id, category, occurrences, dupes_w_variations, variations
 FROM comparison_duplicates
 WHERE dupes_w_variations > 0
 ORDER BY CAST(occurrences AS INT) DESC;
+
+-- 2. Duplicados solo por copias exactas (sin variaciones)
+SELECT origin, id, category, exact_duplicates, occurrences
+FROM comparison_duplicates
+WHERE exact_duplicates > 0 AND dupes_w_variations = 0
+ORDER BY CAST(exact_duplicates AS INT) DESC;
+
+-- 3. Duplicados problemáticos en ambos lados (categoría "both")
+SELECT origin, id, occurrences, variations
+FROM comparison_duplicates
+WHERE category = 'both' AND dupes_w_variations > 0
+ORDER BY origin, CAST(occurrences AS INT) DESC;
+
+-- 4. Top 10 IDs con más ocurrencias
+SELECT origin, id, occurrences, exact_duplicates, variations
+FROM comparison_duplicates
+ORDER BY CAST(occurrences AS INT) DESC
+LIMIT 10;
+
+-- 5. Análisis de campos que más varían
+SELECT 
+  origin,
+  COUNT(DISTINCT id) as affected_ids,
+  SUM(CASE WHEN variations LIKE '%amount:%' THEN 1 ELSE 0 END) as vary_amount,
+  SUM(CASE WHEN variations LIKE '%status:%' THEN 1 ELSE 0 END) as vary_status
+FROM comparison_duplicates
+WHERE dupes_w_variations > 0
+GROUP BY origin;
 ```
 
-**Columnas clave:**
+#### 3.2.5 Parámetro `priorityCol` - Resolución Inteligente de Duplicados
 
-| Columna | Significado |
-|---------|-------------|
-| `origin` | `"ref"` o `"new"` (tabla de origen) |
-| `exact_duplicates` | Copias exactas (mismo hash) |
-| `dupes_w_variations` | Duplicados con alguna columna diferente |
-| `occurrences` | Total de filas con esta clave |
-| `variations` | Detalle de columnas con variaciones |
+**¿Qué hace?** Filtra duplicados **antes** del análisis, manteniendo solo la fila con **mayor prioridad** dentro de cada grupo (clave + origen).
 
-**Ejemplos:**
+**¿Cuándo usarlo?**
 
+| Escenario | ¿Usar priorityCol? | Columna recomendada |
+|-----------|-------------------|---------------------|
+| Tabla snapshot (1 fila por ID, datos estáticos) | ❌ No necesario | - |
+| Tabla histórica con versiones (CDC, SCD Type 2) | ✅ **Sí** | `version`, `update_timestamp`, `effective_date` |
+| Tabla con retries/reprocessing (mismo ID, múltiples intentos) | ✅ **Sí** | `processing_timestamp`, `retry_count` |
+| Tabla transaccional (cada fila es única por diseño) | ❌ No necesario | - |
+| Tabla con múltiples updates del mismo registro | ✅ **Sí** | `last_modified_date`, `sequence_number` |
+
+**Cómo funciona:**
+
+```scala
+// Pseudocódigo interno
+Window.partitionBy(origin, key1, key2, ...)  // Agrupa por origen + clave
+      .orderBy(priorityCol DESC NULLS LAST)  // Ordena: valores altos primero, NULL al final
+      
+→ Selecciona row_number() = 1  (fila con valor MÁS ALTO)
 ```
-origin="ref", id="123", exact_dup="1", dupes_w_var="1", occ="3", variations="amount: [100.00,100.50]"
-→ 3 filas con id=123 en REF: 2 idénticas + 1 con amount diferente
 
-origin="new", id="456", exact_dup="2", dupes_w_var="0", occ="3", variations=""
-→ 3 filas con id=456 en NEW: todas idénticas (copias exactas)
+**Criterios de ordenación:**
+- ✅ **Valores altos tienen prioridad**: `1000 > 100 > 10`
+- ✅ **Timestamps más recientes primero**: `2025-11-21 > 2025-11-20`
+- ✅ **NULLs al final (menor prioridad)**: Se descartan si existen valores no-NULL
+
+**Ejemplo - Tabla con múltiples updates:**
+
+```sql
+-- ANTES de priorityCol (datos crudos)
+REF table:
+┌───────┬─────────────────────┬────────┬────────┐
+│ id    │ update_timestamp    │ status │ amount │
+├───────┼─────────────────────┼────────┼────────┤
+│ 123   │ 2025-11-21 10:00:00 │ A      │ 100    │  ← Update v1
+│ 123   │ 2025-11-21 10:05:00 │ A      │ 100    │  ← Update v2 (sin cambios)
+│ 123   │ 2025-11-21 10:10:00 │ I      │ 200    │  ← Update v3 (cambió) ✓ MÁS RECIENTE
+└───────┴─────────────────────┴────────┴────────┘
+
+SIN priorityCol:
+→ Detecta duplicado: 3 filas con id=123
+→ exact_duplicates="1" (2 filas iguales)
+→ dupes_w_variations="2" (3 hashes distintos)
+→ occurrences="3"
+→ variations="status: [A,I] | amount: [100,200]"
+
+CON priorityCol="update_timestamp":
+→ Filtro previo: solo mantiene fila con 10:10:00 (timestamp más alto)
+→ Resultado: 1 sola fila por id=123
+→ NO se reporta como duplicado (occurrences=1 → no entra en tabla)
 ```
+
+**Uso en ejecución:**
+
+```bash
+# Ejemplo 1: Tabla histórica con timestamps
+spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=default.transactions_history \
+  newTable=default.transactions_current \
+  compositeKeyCols=transaction_id \
+  partitionSpec="data_date_part=2025-11-21/" \
+  priorityCol=update_timestamp \
+  checkDuplicates=true \
+  ...
+
+# Ejemplo 2: Tabla con versionado numérico
+priorityCol=version_number
+
+# Ejemplo 3: Tabla CDC con secuencia
+priorityCol=sequence_id
+
+# Ejemplo 4: Tabla con flag de prioridad explícito
+priorityCol=priority_flag  # (valores: 1=alta, 0=baja)
+```
+
+**Validaciones automáticas:**
+- ✅ Si `priorityCol` no existe en el schema → Se ignora (sin error)
+- ✅ Si `priorityCol` es NULL/vacío → Se ignora
+- ✅ Si la columna existe → Se aplica correctamente
+
+**Impacto en métricas:**
+
+| Métrica | Sin priorityCol | Con priorityCol |
+|---------|-----------------|-----------------|
+| **Filas procesadas** | Todas las filas | Solo filas con máxima prioridad |
+| **Duplicados detectados** | Incluye versiones intermedias | Solo duplicados "reales" |
+| **Global Quality** | Penalizado por versiones | Refleja calidad real |
+| **Performance** | Más I/O y procesamiento | Menor volumen, más rápido |
+
+**💡 Recomendación:**
+- Si tu tabla tiene campos como `update_timestamp`, `version`, `last_modified_date` → **Usa `priorityCol`**
+- Si cada fila es única por diseño → No uses `priorityCol` (añade overhead innecesario)
 
 ---
 
@@ -451,7 +619,35 @@ spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
   checkDuplicates=true
 ```
 
-### 4.5 Comparación de Tablas con Esquemas Diferentes
+### 4.5 Comparación con Resolución Automática de Duplicados (priorityCol)
+
+```bash
+# Tabla histórica con múltiples versiones/updates del mismo registro
+# priorityCol mantiene solo la fila con timestamp más alto por cada ID
+spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=default.transactions_history \
+  newTable=default.transactions_current \
+  compositeKeyCols=transaction_id \
+  partitionSpec="data_date_part=2025-11-21/" \
+  priorityCol=update_timestamp \
+  checkDuplicates=true \
+  initiativeName=HistoryComparison \
+  tablePrefix=default.cmp_ \
+  outputBucket=s3a://bucket/comparisons \
+  executionDate=2025-11-21
+
+# ✅ Beneficio: Solo detecta duplicados "reales", no versiones intermedias
+# ✅ Resultado: Global Quality más preciso (no penalizado por updates)
+```
+
+**Casos ideales para `priorityCol`:**
+- Tablas CDC (Change Data Capture) → `priorityCol=op_timestamp`
+- Tablas versionadas → `priorityCol=version_number`
+- Tablas con reprocessing → `priorityCol=processing_timestamp`
+- Tablas SCD Type 2 → `priorityCol=effective_date`
+
+### 4.6 Comparación de Tablas con Esquemas Diferentes
 
 ```bash
 # REF tiene columna 'process_group', NEW tiene 'process_name'
@@ -502,6 +698,7 @@ spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
     "executionDate=2025-11-20",
     "checkDuplicates=true",
     "includeEqualsInDiff=false",
+    "priorityCol=update_timestamp",
     "refFilter=geo IN ('ES','FR') AND time LIKE '06:%'",
     "newFilter=geo NOT IN ('BR')"
   ]
@@ -550,7 +747,8 @@ X-Requested-By: postman
     "outputBucket": "s3a://{{ var.value.bucket }}/comparisons",
     "executionDate": "{{ ds }}",
     "checkDuplicates": "true",
-    "includeEqualsInDiff": "false"
+    "includeEqualsInDiff": "false",
+    "priorityCol": "update_timestamp"
   },
   "advanced_params": {
     "refWindowDays": "-7..0",
@@ -1441,7 +1639,12 @@ LIMIT 50;
 R: ✅ Sí. El motor compara automáticamente solo las columnas comunes. Las columnas únicas aparecen como `ONLY_IN_REF` o `ONLY_IN_NEW` en la tabla differences.
 
 **P: ¿Cómo manejo duplicados en las claves?**  
-R: Activa `checkDuplicates=true` para detectarlos. Define `priorityCol` (en código) para desempate automático seleccionando la fila con mayor prioridad.
+R: Activa `checkDuplicates=true` para detectarlos. Usa `priorityCol` para desempate automático:
+```bash
+priorityCol=update_timestamp  # Mantiene fila con timestamp más alto
+priorityCol=version_number    # Mantiene versión más reciente
+```
+Ver sección 3.2.5 para detalles completos.
 
 **P: ¿Qué significa "Global Quality < 95%"?**  
 R: Menos del 95% de las claves tienen coincidencia exacta sin duplicados. Investiga con:
@@ -1506,8 +1709,10 @@ CREATE TABLE your_table (...) USING parquet LOCATION 's3a://...';
 | **Ver calidad global** | `SELECT * FROM summary WHERE metric='Global quality'` |
 | **Top columnas problemáticas** | `SELECT column, COUNT(*) FROM differences WHERE results='NO_MATCH' GROUP BY column` |
 | **Duplicados críticos** | `SELECT * FROM duplicates WHERE dupes_w_variations > 0` |
+| **Duplicados por categoría** | `SELECT * FROM duplicates WHERE category='both'` |
 | **Excluir columnas** | `ignoreCols=ingestion_ts,audit_user,version` |
 | **Detectar duplicados** | `checkDuplicates=true` |
+| **Resolver duplicados automático** | `priorityCol=update_timestamp` (mantiene más reciente) |
 | **No incluir coincidencias** | `includeEqualsInDiff=false` (default) |
 
 **Comandos útiles:**
@@ -1527,5 +1732,5 @@ SELECT initiative, metric, pct FROM summary WHERE metric='Global quality';
 
 ---
 
-**📚 Última actualización:** 2025-11-20  
-**📦 Versión documento:** 3.1 (con FAQ y Quick Reference)
+**📚 Última actualización:** 2025-11-21  
+**📦 Versión documento:** 3.2 (con análisis detallado de duplicados y priorityCol)

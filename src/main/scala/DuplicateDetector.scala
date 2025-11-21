@@ -7,6 +7,7 @@ import org.apache.spark.sql.types.StringType
 case class DuplicateOut(
                          origin: String,                // "ref" | "new"
                          id: String,                    // composite key or "NULL"
+                         category: String,              // "both" | "only_ref" | "only_new"
                          exact_duplicates: String,      // total - countDistinct(hash)
                          dupes_w_variations: String,    // max(countDistinct(hash) - 1, 0)
                          occurrences: String,           // group total
@@ -52,8 +53,14 @@ object DuplicateDetector {
     // Select columns for output (including canonical ID).
     val selected = selectForOutput(grouped, compositeKeyCols, nonKeys)
 
+    // Compute duplicate categories (both/only_ref/only_new) to match summary logic
+    val categories = computeDuplicateCategories(selected, spark)
+
+    // Join with categories and map to final DTO
+    val withCategory = selected.join(categories, Seq("id", "origin"), "left")
+
     // Map to the final DTO, formatting variation text.
-    selected.map(rowToDuplicateOut(_, nonKeys))(Encoders.product[DuplicateOut]).toDF()
+    withCategory.map(rowToDuplicateOut(_, nonKeys))(Encoders.product[DuplicateOut]).toDF()
   }
 
   // ─────────────────────────── Helpers ───────────────────────────
@@ -135,16 +142,44 @@ object DuplicateDetector {
     grouped.select((baseCols ++ variationCols): _*)
   }
 
+  /**
+   * Compute duplicate categories (both/only_ref/only_new) matching summary logic.
+   * Input is the 'selected' DataFrame after selectForOutput (has 'id' and 'origin' columns).
+   * Returns DataFrame with columns: id, origin, category
+   */
+  private def computeDuplicateCategories(selected: DataFrame, spark: SparkSession): DataFrame = {
+    import spark.implicits._
+
+    // Get distinct (id, origin) pairs
+    val idsBySrc = selected.select($"id", $"origin").distinct()
+
+    // Identify which IDs appear in ref and/or new
+    val refIds = idsBySrc.filter($"origin" === "ref").select($"id").distinct()
+    val newIds = idsBySrc.filter($"origin" === "new").select($"id").distinct()
+
+    val bothIds = refIds.intersect(newIds).withColumn("category", lit("both"))
+    val onlyRefIds = refIds.except(newIds).withColumn("category", lit("only_ref"))
+    val onlyNewIds = newIds.except(refIds).withColumn("category", lit("only_new"))
+
+    // Union all categories
+    val allCategories = bothIds.union(onlyRefIds).union(onlyNewIds)
+
+    // Cross join with origin values to create entries for both ref and new rows
+    val srcValues = Seq("ref", "new").toDF("origin")
+    allCategories.crossJoin(srcValues)
+  }
+
   // Build output DTO from a grouped row; format variations as "col: [v1,v2] | ..." (skip NullToken).
   private def rowToDuplicateOut(row: org.apache.spark.sql.Row, nonKeys: Seq[String]): DuplicateOut = {
     val origin = row.getAs[String]("origin")
     val id = row.getAs[String]("id")
+    val category = row.getAs[String]("category")
     val exact = row.getAs[Long]("exact_dup").toString
     val vdup = row.getAs[Long]("var_dup").toString
     val occ = row.getAs[Long]("occurrences").toString
 
     val variationsText = buildVariationsText(row, nonKeys)
-    DuplicateOut(origin, id, exact, vdup, occ, variationsText)
+    DuplicateOut(origin, id, category, exact, vdup, occ, variationsText)
   }
 
   // Render deterministic variations text, ignoring the special NullToken.

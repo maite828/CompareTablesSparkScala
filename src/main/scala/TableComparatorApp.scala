@@ -5,7 +5,7 @@ import java.time.LocalDate
 
 class TableComparatorApp()(implicit spark: SparkSession) extends Logging {
 
-  // ─────────────────────────── log + println (double logging) ───────────────────────────
+  // ─────────────────────────── logger + println (double logging) ───────────────────────────
   private def info(msg: String): Unit = { log.info(msg); println(msg) }
   private def warn(msg: String): Unit = { log.warn(msg); println(msg) }
   private def err (msg: String): Unit = { log.error(msg); println(msg) }
@@ -137,10 +137,14 @@ class TableComparatorApp()(implicit spark: SparkSession) extends Logging {
     val refSpecOverride = refSpecDirect.orElse(refSpecWindow)
     val newSpecOverride = newSpecDirect.orElse(newSpecWindow)
 
-    // Optional per-side filters (Spark SQL expressions)
-    val refFilter = kv.get("refFilter").map(_.trim).filter(_.nonEmpty)
-    val newFilter = kv.get("newFilter").map(_.trim).filter(_.nonEmpty)
+    // Optional per-side filters (Spark SQL expresions)
+    val refFilter = kv.get("refFilter").filter(_.nonEmpty)
+    val newFilter = kv.get("newFilter").filter(_.nonEmpty)
     info(s"[DEBUG] refFilter: ${refFilter.getOrElse("<none>")}, newFilter: ${newFilter.getOrElse("<none>")}")
+
+    // Optional priority column for duplicate detection (keeps highest value per group)
+    val priorityCol = kv.get("priorityCol").filter(_.nonEmpty)
+    info(s"[DEBUG] priorityCol: ${priorityCol.getOrElse("<none>")}")
 
     CompareConfig(
       spark = spark,
@@ -154,7 +158,7 @@ class TableComparatorApp()(implicit spark: SparkSession) extends Logging {
       outputBucket = outputBucket,
       checkDuplicates = checkDuplicates,
       includeEqualsInDiff = includeEquals,
-      priorityCol = None,
+      priorityCol = priorityCol,
       aggOverrides = Map.empty,
       outputDateISO = outputDateISO,
       // nuevos campos:
