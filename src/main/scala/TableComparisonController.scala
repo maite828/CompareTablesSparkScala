@@ -1,7 +1,9 @@
 
-import org.apache.spark.internal.Logging
+import com.santander.cib.adhc.internal_aml_tools.util.PrepUtils
 
 import java.time.LocalDate
+import org.apache.logging.log4j.scala.Logging
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.storage.StorageLevel
@@ -53,7 +55,10 @@ object TableComparisonController extends Logging {
       config.ignoreCols,
       // overrides por lado (nuevos)
       config.refPartitionSpecOverride,
-      config.newPartitionSpecOverride
+      config.newPartitionSpecOverride,
+      // filtros SQL personalizados
+      config.refFilter,
+      config.newFilter
     )
     val diffDf    = computeAndWriteDifferences(config, prep, executionDate)
     val dupRead   = computeWriteAndReadDuplicates(config, prep, executionDate)
@@ -144,7 +149,7 @@ object TableComparisonController extends Logging {
       writeResult(
         s"${config.tablePrefix}duplicates",
         dupDf,
-        Seq("origin","id","exact_duplicates","dupes_w_variations","occurrences","variations"),
+        Seq("origin","id","category","exact_duplicates","dupes_w_variations","occurrences","variations"),
         config.initiativeName,
         executionDate
       )
@@ -240,7 +245,7 @@ object TableComparisonController extends Logging {
       if (refFilter.isDefined) logInfo(s"[FILTER]   REF: ${refFilter.get}")
       if (newFilter.isDefined) logInfo(s"[FILTER]   NEW: ${newFilter.get}")
     }
-    
+
     PrepUtils.logFilteredInputFiles(filteredRef, newDf = filteredNew, info = logInfo)
 
     val schemaReport = SchemaChecker.analyze(filteredRef, filteredNew)
@@ -248,22 +253,22 @@ object TableComparisonController extends Logging {
 
     // Compute columns to compare from REF (for backward compatibility)
     val colsToCompareRef = PrepUtils.computeColsToCompare(filteredRef, refSpec, ignoreCols, compositeKeyCols)
-    
+
     // Get actual available columns from each DataFrame (only select columns that exist)
     val refAvailableCols = filteredRef.columns.toSet
     val newAvailableCols = filteredNew.columns.toSet
-    
+
     // For each table, select: keys + columns that exist in that table
     val neededColsRef = (compositeKeyCols ++ colsToCompareRef).filter(refAvailableCols.contains).distinct
     val neededColsNew = (compositeKeyCols ++ colsToCompareRef).filter(newAvailableCols.contains).distinct
-    
+
     logInfo(s"[COLUMNS] ✓ REF selecting ${neededColsRef.length} cols (${compositeKeyCols.length} keys + ${neededColsRef.length - compositeKeyCols.length} data)")
     logInfo(s"[COLUMNS] ✓ NEW selecting ${neededColsNew.length} cols (${compositeKeyCols.length} keys + ${neededColsNew.length - compositeKeyCols.length} data)")
-    
+
     // Columns to actually compare: intersection of both after filtering
     val colsToCompare = colsToCompareRef.filter(c => refAvailableCols.contains(c) && newAvailableCols.contains(c))
-    val excludedCols = compositeKeyCols.length + ignoreCols.length + 
-                       (if (refSpec.isDefined) refSpec.get.split("/").length else 0)
+    val excludedCols = compositeKeyCols.length + ignoreCols.length +
+      (if (refSpec.isDefined) refSpec.get.split("/").length else 0)
     logInfo(s"[COLUMNS] → Comparing ${colsToCompare.length} common columns")
     logInfo(s"[COLUMNS] → Excluded: ${excludedCols} total (${compositeKeyCols.length} keys, ${ignoreCols.length} ignored, partition cols)")
     logInfo(s"[COLUMNS] → Comparison scope: Only columns present in BOTH tables will be compared")
@@ -289,7 +294,7 @@ object TableComparisonController extends Logging {
         val beforeCount = try { df.count() } catch { case _: Throwable => -1L }
         val filtered = df.filter(expr)
         val afterCount = try { filtered.count() } catch { case _: Throwable => -1L }
-        
+
         if (beforeCount >= 0 && afterCount >= 0) {
           val filtered_pct = if (beforeCount > 0) f"${afterCount.toDouble / beforeCount * 100}%.2f" else "0.00"
           logInfo(s"[FILTER] ✓ Applied on '$label': $expr")

@@ -1,3 +1,4 @@
+
 import ComparatorDefaults.SampleIdsForSummary
 import org.apache.spark.sql.{Column, DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
@@ -112,7 +113,7 @@ object SummaryGenerator extends Serializable {
   // ─────────────────────────── Helpers ───────────────────────────
 
   // Percentage with 4 decimals; "-" when denominator is 0.
-  def pctStr(num: Long, den: Long): String =
+  private def pctStr(num: Long, den: Long): String =
     if (den == 0) "-" else f"${num.toDouble / den * 100}%.4f%%"
 
   // Normalize empty strings to NULL
@@ -146,20 +147,37 @@ object SummaryGenerator extends Serializable {
     CoreCounts(totalRowsRef, totalRowsNew, nRefIds, nNewIds, nBothIds, onlyRef, onlyNew)
   }
 
-  // Duplicate IDs within a single side (more than one row per ID).
-  private def dupIds(df: DataFrame, cid: Column): DataFrame =
-    df.groupBy(cid.as("cid"))
-      .agg(count(lit(1)).as("cnt"))
-      .filter(col("cnt") > 1)
-      .select(col("cid"))
-
+  /**
+   * Extract duplicate IDs from the already-computed duplicates table.
+   * This ensures 100% coherence with the duplicates table (respects priorityCol, etc.)
+   *
+   * If dupDf is empty (checkDuplicates=false), returns empty DataFrames.
+   */
   private def computeDupSets(in: SummaryInputs, cid: Column): DupSets = {
-    val dRef = dupIds(in.refDf, cid)
-    val dNew = dupIds(in.newDf, cid)
-    val both = dRef.intersect(dNew)
-    val oRef = dRef.except(dNew)
-    val oNew = dNew.except(dRef)
+    import in.spark.implicits._
+
+    // If duplicates detection was disabled, return empty sets
+    // Check if DataFrame has columns (emptyDataFrame has no columns)
+    if (in.dupDf.columns.isEmpty) {
+      val emptyDf = in.spark.emptyDataFrame.select(cid.as("cid"))
+      return DupSets(emptyDf, emptyDf, emptyDf, emptyDf)
+    }
+
+    // Extract distinct IDs from duplicates table, grouped by origin and category
+    val dupIds = in.dupDf
+      .select($"origin", $"id".as("cid"), $"category")
+      .distinct()
+
+    // Separate by origin
+    val dRef = dupIds.filter($"origin" === "ref").select($"cid").distinct()
+    val dNew = dupIds.filter($"origin" === "new").select($"cid").distinct()
+
+    // Compute intersections using category column (already computed in duplicates table)
+    val both = dupIds.filter($"category" === "both").select($"cid").distinct()
+    val oRef = dupIds.filter($"category" === "only_ref").select($"cid").distinct()
+    val oNew = dupIds.filter($"category" === "only_new").select($"cid").distinct()
     val any  = dRef.union(dNew).distinct()
+
     DupSets(both, oRef, oNew, any)
   }
 

@@ -53,6 +53,7 @@ object TableIO {
          |CREATE TABLE IF NOT EXISTS $table (
          |  origin STRING,
          |  id STRING,
+         |  category STRING,
          |  exact_duplicates STRING,
          |  dupes_w_variations STRING,
          |  occurrences STRING,
