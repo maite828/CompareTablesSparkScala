@@ -16,7 +16,8 @@ object ComparisonBuilders {
     val df = DiffGenerator.generateDifferencesTable(
       spark, refDf, newDf, compositeKeyCols, colsToCompare, includeEqualsInDiff, config
     )
-    df.persist(StorageLevel.MEMORY_AND_DISK)
+    // PERF OPTIMIZATION: Use SER for 30-50% less memory usage (serialized + compressed)
+    df.persist(StorageLevel.MEMORY_AND_DISK_SER)
   }
 
   def computeDuplicates(

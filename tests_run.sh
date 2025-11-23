@@ -16,16 +16,20 @@ esac
 # ───────────────────────────────────────────────────────────────────────────────
 # 1) Selección de JAVA_HOME (arreglado para Windows)
 # ───────────────────────────────────────────────────────────────────────────────
+# Versión deseada para tests (sincronizada con build.sbt/Spark 3.x)
+REQUESTED_JAVA_VERSION="${SPARK_JAVA_VERSION:-11}"
+
 if $is_macos; then
-  # Forzar JDK 17 en macOS (Spark/Hadoop friendly)
-  if ! JAVA_17_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null)"; then
-    echo "🛑 No se encontró JDK 17 en macOS."
-    echo "   Instálalo:  brew install --cask temurin@17"
+  # Detección dinámica en macOS
+  if JAVA_HOME_DETECTED="$(/usr/libexec/java_home -v "$REQUESTED_JAVA_VERSION" 2>/dev/null)"; then
+    export JAVA_HOME="$JAVA_HOME_DETECTED"
+    echo "🍎 macOS → usando JAVA_HOME=$JAVA_HOME"
+  else
+    echo "🛑 No se encontró JDK $REQUESTED_JAVA_VERSION en macOS."
+    echo "   Instálalo:  brew install --cask temurin@$REQUESTED_JAVA_VERSION"
     exit 1
   fi
-  export JAVA_HOME="$JAVA_17_HOME"
   export PATH="$JAVA_HOME/bin:$PATH"
-  echo "🍎 macOS → usando JAVA_HOME=$JAVA_HOME"
 elif $is_windows_gitbash; then
   # Buscar una instalación válida de Java en PATH.
   JAVA_HOME=""

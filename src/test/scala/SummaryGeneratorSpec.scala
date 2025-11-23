@@ -16,8 +16,9 @@ class SummaryGeneratorSpec extends AnyFlatSpec with Matchers with SparkSessionTe
 
     // diff necesita columnas id y results
     val diffDf = emptyDf.withColumn("results", lit(null: String))
-    // dup necesita columna origin (y ya tiene id)
+    // dup necesita columna origin, id y category
     val dupDf  = emptyDf.withColumn("origin",  lit(null: String))
+                        .withColumn("category", lit(null: String))
 
     val cfg = CompareConfig(
       spark               = spark,
@@ -39,8 +40,12 @@ class SummaryGeneratorSpec extends AnyFlatSpec with Matchers with SparkSessionTe
       SummaryInputs(spark, emptyDf, emptyDf, diffDf, dupDf, Seq("id"))
     )
 
-    summary.filter($"block" === "KPIS" && $"metric" === "Total rows REF")
-      .select("numerator").as[String].collect().head
+    summary.show(false)
+    val result = summary.filter($"block" === "KPIS" && $"metric" === "Total rows REF")
+      .select("numerator").as[String].collect()
+
+    if (result.isEmpty) fail("No se encontró la métrica 'Total rows REF' en el resumen")
+    result.head
   }
 }
 

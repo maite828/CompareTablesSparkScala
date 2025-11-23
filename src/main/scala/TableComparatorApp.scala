@@ -165,7 +165,10 @@ class TableComparatorApp()(implicit spark: SparkSession) extends Logging {
       refPartitionSpecOverride = refSpecOverride,
       newPartitionSpecOverride = newSpecOverride,
       refFilter = refFilter,
-      newFilter = newFilter
+      newFilter = newFilter,
+      columnMapping = kv.collect {
+        case (k, v) if k.startsWith("colMap.") => k.stripPrefix("colMap.") -> v
+      }
     )
   }
 

@@ -113,7 +113,7 @@ object SummaryGenerator extends Serializable {
   // ─────────────────────────── Helpers ───────────────────────────
 
   // Percentage with 4 decimals; "-" when denominator is 0.
-  private def pctStr(num: Long, den: Long): String =
+  def pctStr(num: Long, den: Long): String =
     if (den == 0) "-" else f"${num.toDouble / den * 100}%.4f%%"
 
   // Normalize empty strings to NULL

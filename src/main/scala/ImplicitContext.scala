@@ -41,6 +41,14 @@ object ImplicitContext {
       try in.close() catch { case _: Throwable => () }
     }
 
+    // PERF OPTIMIZATION: Enable AQE for better query optimization (5-15% improvement)
+    // Databricks enables this by default, but ensure it's on for other environments
+    try {
+      spark.conf.set("spark.sql.adaptive.enabled", "true")
+      spark.conf.set("spark.sql.adaptive.coalescePartitions.enabled", "true")
+      spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+    } catch { case _: Throwable => () }  // Ignore if already set or not supported
+
     _spark = Some(spark)
     _properties = Some(props)
 

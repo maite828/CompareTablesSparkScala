@@ -248,6 +248,204 @@ refFilter="UPPER(status) = 'ACTIVE'"
 
 ---
 
+#### 2.4.4 Column Mapping - Comparar Tablas con Nombres de Columnas Diferentes (Nuevo ✨)
+
+**¿Qué hace?** Permite comparar tablas donde las columnas tienen **nombres diferentes** pero representan los **mismos datos**. El motor renombra automáticamente las columnas de la tabla NEW para que coincidan con los nombres de la tabla REF antes de la comparación.
+
+**¿Cuándo usarlo?**
+
+| Escenario | ¿Usar Column Mapping? | Ejemplo |
+|-----------|----------------------|---------|
+| Migración de sistema legacy a nuevo | ✅ **Sí** | `customer_id` (legacy) → `cust_id` (nuevo) |
+| Refactoring de schema | ✅ **Sí** | `transaction_date` → `txn_dt` |
+| Integración de fuentes externas | ✅ **Sí** | `amount` (interno) → `transaction_amount` (externo) |
+| Tablas con mismo schema | ❌ No necesario | Ambas usan `customer_id` |
+| Comparación de columnas diferentes | ❌ Usar `ignoreCols` | Comparar solo columnas comunes |
+
+**Sintaxis:**
+
+```bash
+colMap.<nombre_columna_ref>=<nombre_columna_new>
+  colMap.name=nombre_cliente \
+  colMap.balance=saldo \
+  colMap.data_date_part=fecha_proceso \
+  colMap.geo=pais \
+  colMap.priority=prioridad \
+```
+
+**Parámetros:**
+
+| Parámetro | Descripción | Ejemplo |
+|-----------|-------------|---------|
+| `colMap.<refCol>` | Nombre de columna en tabla REF | `colMap.customer_id` |
+| `=<newCol>` | Nombre de columna en tabla NEW | `=cust_id` |
+
+**Cómo funciona internamente:**
+
+```
+1. Carga tabla REF con nombres originales
+   REF: [customer_id, transaction_date, amount, status]
+   
+2. Carga tabla NEW con nombres originales
+   NEW: [cust_id, txn_dt, transaction_amount, state]
+   
+3. Aplica column mapping (renombra columnas de NEW)
+   NEW (después): [customer_id, transaction_date, amount, status]
+   
+4. Comparación
+   Ahora ambas tablas tienen los mismos nombres de columna
+```
+
+**Ejemplos:**
+
+**Ejemplo 1: Migración simple (3 columnas)**
+
+```bash
+spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=legacy.customers \
+  newTable=modern.customers_v2 \
+  compositeKeyCols=customer_id \
+  partitionSpec="data_date_part=2025-11-20/" \
+  colMap.customer_id=cust_id \
+  colMap.full_name=customer_name \
+  colMap.account_balance=balance \
+  initiativeName=CustomerMigration \
+  tablePrefix=default.cmp_ \
+  outputBucket=s3a://bucket/comparisons \
+  executionDate=2025-11-20
+```
+
+**Mapeo aplicado:**
+```
+REF                    NEW (original)         NEW (después del mapeo)
+─────────────────────  ─────────────────────  ─────────────────────
+customer_id            cust_id         →      customer_id
+full_name              customer_name   →      full_name
+account_balance        balance         →      account_balance
+```
+
+**Ejemplo 2: Migración compleja con particiones**
+
+```bash
+# Tablas con diferentes nombres de columnas de partición
+spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=db.tabla_referencia \
+  newTable=db.tabla_nueva \
+  compositeKeyCols=id \
+  refPartitionSpec="geo=*/data_date_part=[2023-11-22,2023-11-23]" \
+  newPartitionSpec="geo=*/fecha_proceso=[2023-11-22,2023-11-23]" \
+  colMap.id=id_v2 \
+  colMap.name=nombre_cliente \
+  colMap.balance=saldo \
+  colMap.data_date_part=fecha_proceso \
+  colMap.geo=pais \
+  colMap.priority=prioridad \
+  priorityCol=priority \
+  initiativeName=demo_mapeo \
+  tablePrefix=default.res_demo_ \
+  outputBucket=/tmp/demo_out \
+  executionDate=2023-11-22
+```
+
+**Mapeo aplicado:**
+```
+REF                    NEW (original)         NEW (después del mapeo)
+─────────────────────  ─────────────────────  ─────────────────────
+id                     id_v2           →      id
+name                   nombre_cliente  →      name
+balance                saldo           →      balance
+data_date_part         fecha_proceso   →      data_date_part
+geo                    pais            →      geo
+priority               prioridad       →      priority
+```
+
+**Ejemplo 3: Mapeo parcial (solo algunas columnas)**
+
+```bash
+# Solo mapear columnas que difieren, el resto se comparan por nombre
+spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=payments.transactions_ref \
+  newTable=payments.transactions_new \
+  compositeKeyCols=transaction_id \
+  partitionSpec="data_date_part=2025-11-20/" \
+  colMap.customer_id=cust_id \
+  colMap.transaction_date=txn_dt \
+  initiativeName=PartialMapping \
+  tablePrefix=default.cmp_ \
+  outputBucket=s3a://bucket/comparisons \
+  executionDate=2025-11-20
+```
+
+**Resultado:**
+- `customer_id` (REF) se compara con `cust_id` (NEW) → renombrado a `customer_id`
+- `transaction_date` (REF) se compara con `txn_dt` (NEW) → renombrado a `transaction_date`
+- `amount`, `status`, etc. se comparan directamente (mismo nombre en ambas)
+
+**Combinación con otros parámetros:**
+
+```bash
+# Column mapping + filtros SQL + priority column
+spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=legacy.payments \
+  newTable=modern.payments_v2 \
+  compositeKeyCols=payment_id \
+  partitionSpec="data_date_part=2025-11-20/" \
+  colMap.payment_id=txn_id \
+  colMap.customer_id=cust_id \
+  colMap.amount=transaction_amount \
+  colMap.update_timestamp=last_modified \
+  refFilter="amount >= 1000 AND status = 'ACTIVE'" \
+  newFilter="transaction_amount >= 1000 AND state = 'ACTIVE'" \
+  priorityCol=update_timestamp \
+  checkDuplicates=true \
+  initiativeName=AdvancedMapping \
+  tablePrefix=default.cmp_ \
+  outputBucket=s3a://bucket/comparisons \
+  executionDate=2025-11-20
+```
+
+**Notas importantes:**
+
+⚠️ **Orden de aplicación:**
+1. Carga de tablas con filtrado de particiones
+2. Aplicación de filtros SQL (`refFilter`, `newFilter`)
+3. **Aplicación de column mapping** (renombra columnas de NEW)
+4. Exclusión de columnas (`ignoreCols`)
+5. Comparación
+
+⚠️ **Columnas de partición:**
+- Si mapeas una columna de partición, asegúrate de usar el **nombre físico** en `newPartitionSpec`
+- Ejemplo: Si `data_date_part` → `fecha_proceso`, usa `newPartitionSpec="fecha_proceso=..."`
+
+⚠️ **Filtros SQL con column mapping:**
+- En `refFilter`: usa nombres de columna de la tabla REF
+- En `newFilter`: usa nombres de columna **originales** de la tabla NEW (antes del mapeo)
+- Ejemplo:
+  ```bash
+  refFilter="balance >= 1000"           # Nombre en REF
+  newFilter="saldo >= 1000"             # Nombre original en NEW
+  colMap.balance=saldo                  # Mapeo
+  ```
+
+⚠️ **Columnas no mapeadas:**
+- Si una columna existe en ambas tablas con el **mismo nombre**, no necesitas mapearla
+- Si una columna existe solo en una tabla, se ignora automáticamente (no se compara)
+
+**Validaciones automáticas:**
+- ✅ Si una columna mapeada no existe en NEW → Se ignora (warning en logs)
+- ✅ Si una columna mapeada no existe en REF → Se ignora (warning en logs)
+- ✅ Si el mapeo está vacío → No se aplica ninguna transformación
+
+**Demo script:**
+
+Ver [`demo.sh`](demo.sh) para un ejemplo completo end-to-end con column mapping, filtros SQL y priority column.
+
+---
+
 ### 2.5 Orden de Aplicación de Filtros
 
 ```

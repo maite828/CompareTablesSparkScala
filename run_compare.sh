@@ -26,8 +26,8 @@ DEFAULT_WIN_SPARK="C:/Users/x732182/IdeaProjects/mio/CompareTablesSparkScala/.sp
 
 # Selecciona Java adecuado (por defecto 11, Spark 4.x → 17)
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  if JAVA_11_HOME="$(/usr/libexec/java_home -v "$REQUESTED_JAVA_VERSION" 2>/dev/null)"; then
-    export JAVA_HOME="$JAVA_11_HOME"
+  if JAVA_HOME_DETECTED="$(/usr/libexec/java_home -v "$REQUESTED_JAVA_VERSION" 2>/dev/null)"; then
+    export JAVA_HOME="$JAVA_HOME_DETECTED"
   else
     echo "🛑 No JDK $REQUESTED_JAVA_VERSION encontrado. Instala: brew install --cask temurin@$REQUESTED_JAVA_VERSION"
     exit 1
@@ -246,14 +246,34 @@ if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == mingw* ]]; then
   SPARK_SUBMIT_BIN="$SPARK_HOME/bin/spark-submit.cmd"
 fi
 
-echo "🧹 Limpiando metastore/warehouse…"
-rm -rf metastore_db/ derby.log spark-warehouse/* || true
-mkdir -p spark-warehouse
 
 # -------- Run with spark-submit --------
+# -------- Run with spark-submit --------
 echo "📦 Ejecutando spark-submit con $JAR_PATH"
+
+# Detectar si se pasa --class (ej: para DataGenerator)
+MAIN_CLASS_ARGS=""
+APP_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --class)
+      MAIN_CLASS_ARGS="--class $2"
+      shift 2
+      ;;
+    *)
+      APP_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+# Nota: $MAIN_CLASS_ARGS debe ir ANTES del JAR. Los argumentos de la app van DESPUÉS.
+# shellcheck disable=SC2086
 "$SPARK_SUBMIT_BIN" \
   --master local[*] \
   --conf spark.sql.catalogImplementation=hive \
   --conf spark.ui.enabled=false \
-  "$JAR_PATH"
+  $MAIN_CLASS_ARGS \
+  "$JAR_PATH" \
+  "${APP_ARGS[@]+"${APP_ARGS[@]}"}"

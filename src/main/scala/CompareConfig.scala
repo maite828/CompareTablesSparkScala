@@ -41,5 +41,8 @@ final case class CompareConfig(
 
                                 // NEW: optional filters per side (applied right after reading)
                                 refFilter: Option[String] = None,
-                                newFilter: Option[String] = None
+                                newFilter: Option[String] = None,
+
+                                // NEW: Column mapping (refName -> newName) to rename columns in NEW table before comparison
+                                columnMapping: Map[String, String] = Map.empty
                               )

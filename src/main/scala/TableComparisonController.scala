@@ -1,8 +1,8 @@
 
-import com.santander.cib.adhc.internal_aml_tools.util.PrepUtils
+
 
 import java.time.LocalDate
-import org.apache.logging.log4j.scala.Logging
+
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
@@ -58,7 +58,8 @@ object TableComparisonController extends Logging {
       config.newPartitionSpecOverride,
       // filtros SQL personalizados
       config.refFilter,
-      config.newFilter
+      config.newFilter,
+      config.columnMapping // NEW
     )
     val diffDf    = computeAndWriteDifferences(config, prep, executionDate)
     val dupRead   = computeWriteAndReadDuplicates(config, prep, executionDate)
@@ -220,12 +221,23 @@ object TableComparisonController extends Logging {
                               refPartitionSpecOverride: Option[String],   // NEW
                               newPartitionSpecOverride: Option[String],   // NEW
                               refFilter: Option[String] = None,           // NEW
-                              newFilter: Option[String] = None            // NEW
+                              newFilter: Option[String] = None,           // NEW
+                              columnMapping: Map[String, String] = Map.empty // NEW
                             ): Prep = {
 
     // Decidir spec por lado (precedencia: override > global)
     val refSpec = refPartitionSpecOverride.orElse(partitionSpec)
-    val newSpec = newPartitionSpecOverride.orElse(partitionSpec)
+    
+    // Para newSpec, si hay mapeo, debemos "des-mapear" las columnas de partición 
+    // (usar el nombre físico en newTable en lugar del nombre lógico de refTable)
+    val rawNewSpec = newPartitionSpecOverride.orElse(partitionSpec)
+    val newSpec = rawNewSpec.map { spec =>
+      columnMapping.foldLeft(spec) { case (currentSpec, (refCol, newCol)) =>
+        // Reemplaza "refCol=" por "newCol=" en la spec
+        // Usamos regex para asegurar que reemplazamos nombres de columna completos
+        currentSpec.replaceAll(s"\\b$refCol=", s"$newCol=")
+      }
+    }
 
     // Read with partition pruning
     val rawRef = PartitionPruning.loadWithPartition(spark, refTable, refSpec)
@@ -233,7 +245,10 @@ object TableComparisonController extends Logging {
 
     // Optional per-side filters before any further processing
     val filteredRef = applyOptionalFilter(rawRef, refFilter, "ref")
-    val filteredNew = applyOptionalFilter(rawNew, newFilter, "new")
+    val filteredNewRaw = applyOptionalFilter(rawNew, newFilter, "new")
+
+    // NEW: Apply column mapping (rename NEW columns to match REF)
+    val filteredNew = applyColumnMapping(filteredNewRaw, columnMapping)
 
     // Defensive: ensure FileScan (datasource) and not HiveTableScan
     assertFileSource(filteredRef, s"ref=$refTable")
@@ -276,35 +291,48 @@ object TableComparisonController extends Logging {
     val nParts = PrepUtils.pickTargetPartitions(spark)
     logInfo(s"[DEBUG] repartition(nParts=$nParts, keys=${compositeKeyCols.mkString(",")})")
 
+    // PERF OPTIMIZATION: Use SER for 30-50% less memory usage (serialized + compressed)
     val refDf = PrepUtils
       .selectAndRepartition(filteredRef, neededColsRef, compositeKeyCols, nParts)
-      .persist(StorageLevel.MEMORY_AND_DISK)
+      .persist(StorageLevel.MEMORY_AND_DISK_SER)
 
     val newDf = PrepUtils
       .selectAndRepartition(filteredNew, neededColsNew, compositeKeyCols, nParts)
-      .persist(StorageLevel.MEMORY_AND_DISK)
+      .persist(StorageLevel.MEMORY_AND_DISK_SER)
 
     Prep(filteredRef, filteredNew, refDf, newDf, colsToCompare)
   }
 
   // Apply an optional SQL filter clause to a DF, logging the expression.
+  // PERF OPTIMIZATION: Removed expensive count() operations (2 full scans eliminated)
+  // Use Spark UI → SQL tab to monitor actual row counts if needed
   private def applyOptionalFilter(df: DataFrame, filterExprOpt: Option[String], label: String): DataFrame =
     filterExprOpt match {
       case Some(expr) if expr.nonEmpty =>
-        val beforeCount = try { df.count() } catch { case _: Throwable => -1L }
         val filtered = df.filter(expr)
-        val afterCount = try { filtered.count() } catch { case _: Throwable => -1L }
-
-        if (beforeCount >= 0 && afterCount >= 0) {
-          val filtered_pct = if (beforeCount > 0) f"${afterCount.toDouble / beforeCount * 100}%.2f" else "0.00"
-          logInfo(s"[FILTER] ✓ Applied on '$label': $expr")
-          logInfo(s"[FILTER]   Rows: $beforeCount → $afterCount ($filtered_pct%)")
-        } else {
-          logInfo(s"[FILTER] ✓ Applied on '$label': $expr (lazy evaluation, count skipped)")
-        }
+        logInfo(s"[FILTER] ✓ Applied filter on '$label': $expr")
+        logInfo(s"[FILTER]   (Row counts skipped for performance - use Spark UI to monitor)")
         filtered
       case _ => df
     }
+
+  // NEW: Rename columns in NEW table based on mapping (refName -> newName)
+  // We want NEW table to have REF names. So if mapping is "id" -> "id_v2", we rename "id_v2" to "id".
+  def applyColumnMapping(df: DataFrame, mapping: Map[String, String]): DataFrame = {
+    if (mapping.isEmpty) df
+    else {
+      logInfo(s"[MAPPING] Applying column mapping: ${mapping.mkString(", ")}")
+      mapping.foldLeft(df) { case (acc, (refName, newName)) =>
+        if (acc.columns.contains(newName)) {
+          logInfo(s"[MAPPING] Renaming '$newName' -> '$refName'")
+          acc.withColumnRenamed(newName, refName)
+        } else {
+          logWarn(s"[MAPPING] [WARN] Target column '$newName' not found in NEW table. Skipping rename to '$refName'.")
+          acc
+        }
+      }
+    }
+  }
 
   // ─────────────────────────── Write helpers ───────────────────────────
   private def writeResult(

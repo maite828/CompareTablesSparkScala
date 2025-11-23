@@ -24,6 +24,10 @@ trait SparkSessionTestWrapper extends BeforeAndAfterAll { self: Suite =>
     .appName("unit-tests")
     .master("local[*]")
     .config("spark.ui.enabled", "false")   // desactiva UI para GitHub Actions
+    .config("spark.driver.host", "localhost")
+    .config("spark.driver.bindAddress", "127.0.0.1")
+    .config("spark.hadoop.security.authentication", "simple")
+    .config("spark.hadoop.security.authorization", "false")
     .getOrCreate()
 
   /** Cierre ordenado tras terminar todos los tests de la Suite. */

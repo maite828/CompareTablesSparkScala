@@ -1,0 +1,2113 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Table Comparator - Documentation</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background: white;
+        }
+        
+        h1 {
+            color: #EC0000;
+            border-bottom: 3px solid #EC0000;
+            padding-bottom: 10px;
+            page-break-after: avoid;
+        }
+        
+        h2 {
+            color: #4D4D4D;
+            border-bottom: 2px solid #EC0000;
+            padding-bottom: 8px;
+            margin-top: 30px;
+            page-break-after: avoid;
+        }
+        
+        h3 {
+            color: #666666;
+            margin-top: 25px;
+            page-break-after: avoid;
+        }
+        
+        h4 {
+            color: #666666;
+            margin-top: 20px;
+            page-break-after: avoid;
+        }
+        
+        code {
+            background-color: #f5f5f5;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            color: #EC0000;
+        }
+        
+        pre {
+            background-color: #4D4D4D;
+            color: #ffffff;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            page-break-inside: avoid;
+        }
+        
+        pre code {
+            background-color: transparent;
+            color: #ffffff;
+            padding: 0;
+        }
+        
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 20px 0;
+            page-break-inside: avoid;
+        }
+        
+        th {
+            background-color: #EC0000;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: bold;
+        }
+        
+        td {
+            padding: 10px;
+            border: 1px solid #ddd;
+        }
+        
+        tr:nth-child(even) {
+            background-color: #f5f5f5;
+        }
+        
+        ul, ol {
+            margin: 15px 0;
+            padding-left: 30px;
+        }
+        
+        li {
+            margin: 8px 0;
+        }
+        
+        strong {
+            color: #4D4D4D;
+        }
+        
+        em {
+            color: #666666;
+        }
+        
+        a {
+            color: #EC0000;
+            text-decoration: none;
+        }
+        
+        a:hover {
+            text-decoration: underline;
+        }
+        
+        .page-break {
+            page-break-before: always;
+        }
+        
+        @media print {
+            body {
+                max-width: 100%;
+            }
+            
+            a {
+                color: #000;
+                text-decoration: none;
+            }
+            
+            pre {
+                border: 1px solid #ccc;
+            }
+        }
+    </style>
+</head>
+<body>
+<p><h1>Internal Tools - Table Comparison Engine</h1></p><p><strong>Version:</strong> 1.0.5-SNAPSHOT | <strong>Stack:</strong> Scala 2.12.17 + Spark 3.5.0
+---</p><p><h1>🚀 Guía de Uso - Motor de Comparación de Tablas Spark</h1></p><p>Motor distribuido para comparar tablas Spark a nivel de fila, columna y clave compuesta. Genera 3 tablas de salida con análisis exhaustivo: diferencias, duplicados y métricas de calidad.</p><p>---</p><p>> <strong>⚡ TL;DR (30 segundos):</strong> Motor Spark para comparar tablas grandes con análisis exhaustivo.
+> - ✅ <strong>Detecta diferencias</strong> columna por columna entre REF y NEW
+> - ✅ <strong>Identifica duplicados</strong> y variaciones por clave compuesta
+> - ✅ <strong>Calcula métricas de calidad</strong> automáticas (Global Quality)
+> - ✅ <strong>Genera 3 tablas SQL</strong> listas para análisis: differences, duplicates, summary
+> - 🚀 <strong>Copy-paste ready</strong>: <a href="#11-ejemplo-básico-comparación-simple">Ver ejemplo básico</a></p><p>---</p><p><h2>📋 Índice</h2></p><p><h3>🎯 Parte I: Guía de Uso</h3>
+<ol>
+<li><a href="#1-inicio-rápido">Inicio Rápido</a></li>
+<li><a href="#2-configuración-completa">Configuración Completa</a></li>
+<li><a href="#3-entendiendo-los-resultados">Entendiendo los Resultados</a></li>
+<li><a href="#4-casos-de-uso-comunes">Casos de Uso Comunes</a></li>
+<li><a href="#5-diagnóstico-y-troubleshooting">Diagnóstico y Troubleshooting</a></li>
+</ol></p><p><h3>⚙️ Parte II: Referencia Técnica</h3>
+<ol>
+<li><a href="#6-arquitectura-del-motor">Arquitectura del Motor</a></li>
+<li><a href="#7-schema-y-semántica-de-salidas">Schema y Semántica de Salidas</a></li>
+<li><a href="#8-optimizaciones-y-performance">Optimizaciones y Performance</a></li>
+<li><a href="#9-limitaciones-y-buenas-prácticas">Limitaciones y Buenas Prácticas</a></li>
+</ol></p><p>---</p><p><h1>PARTE I: GUÍA DE USO</h1></p><p>---</p><p><h2>1. Inicio Rápido</h2></p><p><h3>1.1 Ejemplo Básico (Comparación Simple)</h3></p><p>Compara dos tablas del mismo día con claves compuestas:</p><p>``<code>bash
+spark-submit \
+  --class com.santander.cib.adhc.internal_aml_tools.Main \
+  --master yarn --deploy-mode cluster \
+  --driver-memory 4g --executor-memory 8g \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=default.payments_ref \
+  newTable=default.payments_new \
+  compositeKeyCols=transaction_id,customer_id \
+  partitionSpec="geo=ES/data_date_part=2025-11-19/" \
+  ignoreCols=ingestion_ts,audit_user \
+  initiativeName=PaymentsMigration \
+  tablePrefix=default.comparison_ \
+  outputBucket=s3a://my-bucket/comparisons \
+  executionDate=2025-11-19 \
+  checkDuplicates=true
+</code>`<code></p><p><strong>¿Qué hace esto?</strong>
+<ul>
+<li>Compara </code>payments_ref<code> vs </code>payments_new<code> usando </code>transaction_id<code> + </code>customer_id<code> como clave</li>
+<li>Filtra por España y fecha 2025-11-19</li>
+<li>Ignora columnas técnicas (</code>ingestion_ts<code>, </code>audit_user<code>)</li>
+<li>Genera 3 tablas: </code>comparison_differences<code>, </code>comparison_duplicates<code>, </code>comparison_summary<code></li>
+<li>Detecta duplicados en ambos lados</li>
+</ul></p><p>---</p><p><h3>1.2 Verificar Resultados</h3></p><p></code>`<code>sql
+-- 1. Ver métricas generales
+SELECT block, metric, numerator, denominator, pct
+FROM default.comparison_summary
+WHERE initiative = 'PaymentsMigration'
+ORDER BY block, metric;</p><p>-- 2. Ver diferencias (solo no coincidentes)
+SELECT id, column, value_ref, value_new
+FROM default.comparison_differences
+WHERE results = 'NO_MATCH'
+LIMIT 100;</p><p>-- 3. Ver duplicados problemáticos
+SELECT origin, id, occurrences, dupes_w_variations, variations
+FROM default.comparison_duplicates
+WHERE dupes_w_variations > 0
+ORDER BY CAST(occurrences AS INT) DESC;
+</code>`<code></p><p>---</p><p><h2>2. Configuración Completa</h2></p><p><h3>2.1 Parámetros Obligatorios</h3></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Parámetro</th>
+<th>Descripción</th>
+<th>Ejemplo</th>
+</tr></thead><tbody>
+<tr>
+<td></code>refTable<code></td>
+<td>Tabla de referencia (histórica)</td>
+<td></code>default.payments_ref<code></td>
+</tr>
+<tr>
+<td></code>newTable<code></td>
+<td>Tabla nueva (candidata)</td>
+<td></code>default.payments_new<code></td>
+</tr>
+<tr>
+<td></code>compositeKeyCols<code></td>
+<td>Columnas clave, separadas por comas</td>
+<td></code>transaction_id,customer_id<code></td>
+</tr>
+<tr>
+<td></code>initiativeName<code></td>
+<td>Etiqueta para identificar la comparación</td>
+<td></code>PaymentsMigration<code></td>
+</tr>
+<tr>
+<td></code>tablePrefix<code></td>
+<td>Prefijo para tablas resultado</td>
+<td></code>default.comparison_<code></td>
+</tr>
+<tr>
+<td></code>outputBucket<code></td>
+<td>Ruta S3 base para outputs</td>
+<td></code>s3a://bucket/comparisons<code></td>
+</tr>
+<tr>
+<td></code>executionDate<code></td>
+<td>Fecha de ejecución (ISO)</td>
+<td></code>2025-11-19<code></td>
+</tr>
+</tbody></table></p><p><h3>2.2 Parámetros Opcionales Básicos</h3></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Parámetro</th>
+<th>Default</th>
+<th>Descripción</th>
+<th>Ejemplo</th>
+</tr></thead><tbody>
+<tr>
+<td></code>partitionSpec<code></td>
+<td>-</td>
+<td>Filtro de particiones para ambas tablas</td>
+<td></code>geo=ES/data_date_part=2025-11-19/<code></td>
+</tr>
+<tr>
+<td></code>ignoreCols<code></td>
+<td>-</td>
+<td>Columnas a excluir de la comparación (CSV)</td>
+<td></code>ingestion_ts,audit_user,version<code></td>
+</tr>
+<tr>
+<td></code>checkDuplicates<code></td>
+<td></code>false<code></td>
+<td>Activar análisis de duplicados</td>
+<td></code>true<code></td>
+</tr>
+<tr>
+<td></code>includeEqualsInDiff<code></td>
+<td></code>false<code></td>
+<td>Incluir coincidencias (MATCH) en tabla differences</td>
+<td></code>false<code></td>
+</tr>
+<tr>
+<td></code>priorityCol<code></td>
+<td>-</td>
+<td>Columna para resolver duplicados (mantiene valor más alto)</td>
+<td></code>update_timestamp<code>, </code>version<code></td>
+</tr>
+</tbody></table></p><p>---</p><p><h3>2.3 Filtrado de Particiones (partitionSpec)</h3></p><p><strong>Sintaxis:</strong> </code>columna1=valores/columna2=valores/columna3=valores<code></p><p><strong>Formatos soportados:</strong></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Formato</th>
+<th>Ejemplo</th>
+<th>Significado</th>
+</tr></thead><tbody>
+<tr>
+<td>Valor único</td>
+<td></code>geo=ES<code></td>
+<td>Solo España</td>
+</tr>
+<tr>
+<td>Wildcard</td>
+<td></code>geo=*<code></td>
+<td>Todos los geos (sin filtro)</td>
+</tr>
+<tr>
+<td>Lista corchetes</td>
+<td></code>geo=[ES,PT,FR]<code></td>
+<td>España, Portugal o Francia</td>
+</tr>
+<tr>
+<td>Lista pipe</td>
+<td></code>geo=(ES\</td>
+<td>PT\</td>
+<td>FR)<code></td>
+<td>España, Portugal o Francia</td>
+</tr>
+<tr>
+<td>IN corchetes</td>
+<td></code>geo=IN[ES,PT]<code></td>
+<td>España o Portugal</td>
+</tr>
+<tr>
+<td>IN paréntesis</td>
+<td></code>geo=IN(ES,PT)<code></td>
+<td>España o Portugal</td>
+</tr>
+</tbody></table></p><p><strong>Ejemplos:</strong></p><p></code>`<code>bash
+<h1>Una fecha, un geo</h1>
+partitionSpec="geo=ES/data_date_part=2025-11-19/"</p><p><h1>Múltiples geos, una fecha</h1>
+partitionSpec="geo=[ES,PT,FR]/data_date_part=2025-11-19/"</p><p><h1>Todos los geos, una fecha (resuelve automáticamente)</h1>
+partitionSpec="geo=*/data_date_part=2025-11-19/"</p><p><h1>Múltiples fechas (lista explícita)</h1>
+partitionSpec="geo=ES/data_date_part=[2025-11-18,2025-11-19,2025-11-20]/"</p><p><h1>Tres niveles de partición</h1>
+partitionSpec="geo=ES/data_date_part=2025-11-19/process_name=Guarantees/"
+</code>`<code></p><p>---</p><p><h3>2.4 Parámetros Avanzados</h3></p><p><h4>2.4.1 Ventanas Temporales</h4></p><p>Compara diferentes rangos de fechas en cada tabla manteniendo el mismo </code>executionDate<code> de salida:</p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Parámetro</th>
+<th>Descripción</th>
+<th>Ejemplo</th>
+</tr></thead><tbody>
+<tr>
+<td></code>refWindowDays<code></td>
+<td>Ventana temporal REF (start..end)</td>
+<td></code>-2..+2<code> (5 días: -2,-1,0,+1,+2)</td>
+</tr>
+<tr>
+<td></code>newWindowDays<code></td>
+<td>Ventana temporal NEW (start..end)</td>
+<td></code>0..+1<code> (2 días: 0,+1)</td>
+</tr>
+</tbody></table></p><p></code>`<code>bash
+<h1>Ejemplo: REF lee 7 días atrás, NEW lee hoy + 1 día</h1>
+executionDate=2025-11-19
+partitionSpec="geo=ES/data_date_part=2025-11-19/"
+refWindowDays=-7..0
+newWindowDays=0..+1
+<h1>REF lee: 2025-11-12 hasta 2025-11-19</h1>
+<h1>NEW lee: 2025-11-19 hasta 2025-11-20</h1>
+</code>`<code></p><p><h4>2.4.2 Overrides por Lado</h4></p><p>Especifica particiones <strong>completamente diferentes</strong> para cada tabla:</p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Parámetro</th>
+<th>Descripción</th>
+<th>Ejemplo</th>
+</tr></thead><tbody>
+<tr>
+<td></code>refPartitionSpec<code></td>
+<td>Override completo para REF</td>
+<td></code>geo=ES/data_date_part=[2025-11-18,2025-11-19]<code></td>
+</tr>
+<tr>
+<td></code>newPartitionSpec<code></td>
+<td>Override completo para NEW</td>
+<td></code>geo=(PT\</td>
+<td>ES)/data_date_part=IN(2025-11-19)<code></td>
+</tr>
+</tbody></table></p><p></code>`<code>bash
+<h1>Ejemplo: Comparar 1 día REF vs 19 meses NEW</h1>
+refPartitionSpec="data_date_part=2025-11-05/process_group=gar_group"
+newPartitionSpec="data_date_part=[2024-05-01,2024-06-01,...,2025-11-01]/process_name=(Cash|Guarantees)"
+</code>`<code></p><p><strong>Precedencia:</strong> </code>refPartitionSpec<code> > </code>refWindowDays<code> > </code>partitionSpec<code></p><p><h4>2.4.3 Filtros SQL Personalizados (Nuevo ✨)</h4></p><p>Filtra filas <strong>después</strong> del filtrado de particiones usando expresiones SQL de Spark:</p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Parámetro</th>
+<th>Descripción</th>
+<th>Ejemplo</th>
+</tr></thead><tbody>
+<tr>
+<td></code>refFilter<code></td>
+<td>Expresión SQL para filtrar REF</td>
+<td></code>geo IN ('ES','FR') AND time LIKE '06:%'<code></td>
+</tr>
+<tr>
+<td></code>newFilter<code></td>
+<td>Expresión SQL para filtrar NEW</td>
+<td></code>amount >= 1000 AND status = 'ACTIVE'<code></td>
+</tr>
+</tbody></table></p><p><strong>Operadores soportados:</strong></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Operador</th>
+<th>Ejemplo</th>
+</tr></thead><tbody>
+<tr>
+<td></code>IN<code>, </code>NOT IN<code></td>
+<td></code>geo IN ('ES','FR')<code>, </code>geo NOT IN ('BR')<code></td>
+</tr>
+<tr>
+<td></code>=<code>, </code>!=<code>, </code><><code>, </code>><code>, </code>>=<code>, </code><<code>, </code><=<code></td>
+<td></code>status = 'ACTIVE'<code>, </code>amount >= 1000<code></td>
+</tr>
+<tr>
+<td></code>LIKE<code></td>
+<td></code>time LIKE '06:%'<code>, </code>message LIKE '%URGENT%'<code></td>
+</tr>
+<tr>
+<td></code>IS NULL<code>, </code>IS NOT NULL<code></td>
+<td></code>rejected IS NULL<code></td>
+</tr>
+<tr>
+<td></code>AND<code>, </code>OR<code>, </code>NOT<code></td>
+<td></code>geo = 'ES' AND amount > 1000<code></td>
+</tr>
+<tr>
+<td></code>BETWEEN<code></td>
+<td></code>amount BETWEEN 1000 AND 50000<code></td>
+</tr>
+<tr>
+<td>Paréntesis</td>
+<td></code>(geo = 'ES' OR geo = 'FR') AND amount > 1000<code></td>
+</tr>
+</tbody></table></p><p><strong>Ejemplos:</strong></p><p></code>`<code>bash
+<h1>Filtros simples</h1>
+refFilter="geo IN ('ES','FR','PT')"
+refFilter="time LIKE '06:%'"
+refFilter="amount >= 1000"</p><p><h1>Filtros combinados</h1>
+refFilter="geo IN ('ES','FR') AND time LIKE '06:%'"
+refFilter="amount BETWEEN 1000 AND 50000 AND status = 'ACTIVE'"
+refFilter="(geo = 'ES' OR geo = 'FR') AND (message_type IN ('MT103','MT202') OR validation_type = 'AUTO')"</p><p><h1>Filtros con NULL</h1>
+refFilter="rejected IS NULL OR rejected = ''"</p><p><h1>Case-insensitive</h1>
+refFilter="UPPER(status) = 'ACTIVE'"
+</code>`<code></p><p><strong>💡 Tips de Performance:</strong>
+<ul>
+<li><strong>Filtros por columnas particionadas</strong> → usa </code>partitionSpec<code> en su lugar (más rápido)</li>
+<li><strong></code>LIKE 'pattern%'<code></strong> → OK, pero evita </code>LIKE '%pattern%'<code> (scan completo)</li>
+<li><strong>Combina estratégicamente:</strong> Filtro grueso con particiones + filtro fino con SQL</li>
+</ul>
+  </code>`<code>bash
+  partitionSpec="data_date_part=2025-10-01/"  # Filtro grueso por día
+  refFilter="time LIKE '06:%'"                 # Filtro fino por hora
+  </code>`<code></p><p>---</p><p><h3>2.5 Orden de Aplicación de Filtros</h3></p><p></code>`<code>
+<ol>
+<li>Carga inicial de tablas</li>
+</ol>
+   ↓
+<ol>
+<li>Filtrado de particiones</li>
+</ol>
+   (partitionSpec / refPartitionSpec / newPartitionSpec / refWindowDays / newWindowDays)
+   ↓
+<ol>
+<li>Filtros SQL personalizados</li>
+</ol>
+   (refFilter / newFilter)
+   ↓
+<ol>
+<li>Exclusión de columnas</li>
+</ol>
+   (ignoreCols)
+   ↓
+<ol>
+<li>Comparación</li>
+</ol>
+   (solo filas y columnas que pasaron todos los filtros)
+</code>`<code></p><p>---</p><p><h2>3. Entendiendo los Resultados</h2></p><p>El motor genera <strong>3 tablas de salida</strong> con información complementaria:</p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Tabla</th>
+<th>Prefijo</th>
+<th>Contenido</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Differences</strong></td>
+<td></code>{tablePrefix}differences<code></td>
+<td>Diferencias columna por columna (NO_MATCH, ONLY_IN_*)</td>
+</tr>
+<tr>
+<td><strong>Duplicates</strong></td>
+<td></code>{tablePrefix}duplicates<code></td>
+<td>Análisis de duplicados por clave (ocurrencias, variaciones)</td>
+</tr>
+<tr>
+<td><strong>Summary</strong></td>
+<td></code>{tablePrefix}summary<code></td>
+<td>KPIs y métricas agregadas (calidad global, gaps, etc.)</td>
+</tr>
+</tbody></table></p><p>---</p><p><h3>3.1 Tabla differences - Vista Rápida</h3></p><p><strong>¿Qué muestra?</strong> Diferencias detalladas a nivel de columna para cada clave.</p><p></code>`<code>sql
+-- Ver solo diferencias (excluir coincidencias)
+SELECT id, column, value_ref, value_new, results
+FROM comparison_differences
+WHERE results NOT IN ('MATCH', 'EXACT_MATCH')
+ORDER BY id, column;
+</code>`<code></p><p><strong>Etiquetas de resultados:</strong></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Tag</th>
+<th>Significado</th>
+</tr></thead><tbody>
+<tr>
+<td></code>EXACT_MATCH<code></td>
+<td><strong>Todas</strong> las columnas idénticas (1 fila por clave)</td>
+</tr>
+<tr>
+<td></code>MATCH<code></td>
+<td>Columna específica coincide</td>
+</tr>
+<tr>
+<td></code>NO_MATCH<code></td>
+<td>Columna específica difiere</td>
+</tr>
+<tr>
+<td></code>ONLY_IN_REF<code></td>
+<td>Clave o columna solo existe en REF</td>
+</tr>
+<tr>
+<td></code>ONLY_IN_NEW<code></td>
+<td>Clave o columna solo existe en NEW</td>
+</tr>
+</tbody></table></p><p><strong>Ejemplos:</strong></p><p></code>`<code>
+id="123", column="amount", value_ref="100.50", value_new="100.51", results="NO_MATCH"
+id="456", column="*", value_ref="-", value_new="-", results="EXACT_MATCH"
+id="789", column="country", value_ref="ES", value_new="-", results="ONLY_IN_REF"
+</code>`<code></p><p>---</p><p><h3>3.2 Tabla duplicates - Análisis de Duplicados</h3></p><p><strong>¿Qué muestra?</strong> Análisis exhaustivo de unicidad por clave compuesta, detectando duplicados exactos y con variaciones en cada tabla (REF y NEW).</p><p><h4>3.2.1 Schema Completo</h4></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Columna</th>
+<th>Tipo</th>
+<th>Descripción</th>
+</tr></thead><tbody>
+<tr>
+<td></code>origin<code></td>
+<td>String</td>
+<td></code>"ref"<code> o </code>"new"<code> (tabla de origen)</td>
+</tr>
+<tr>
+<td></code>id<code></td>
+<td>String</td>
+<td>Clave compuesta (NULL-safe: valores NULL → "NULL")</td>
+</tr>
+<tr>
+<td></code>category<code></td>
+<td>String</td>
+<td></code>"both"<code>, </code>"only_ref"<code>, o </code>"only_new"<code> (coherente con summary.DUPS)</td>
+</tr>
+<tr>
+<td></code>exact_duplicates<code></td>
+<td>String</td>
+<td>Número de <strong>copias exactas</strong> (mismo hash SHA256)</td>
+</tr>
+<tr>
+<td></code>dupes_w_variations<code></td>
+<td>String</td>
+<td>Número de <strong>grupos con variaciones</strong> (hashes distintos)</td>
+</tr>
+<tr>
+<td></code>occurrences<code></td>
+<td>String</td>
+<td><strong>Total de filas</strong> con esta clave</td>
+</tr>
+<tr>
+<td></code>variations<code></td>
+<td>String</td>
+<td><strong>Detalle de variaciones</strong>: </code>"campo: [val1,val2] \</td>
+<td>campo2: [x,y]"<code></td>
+</tr>
+</tbody></table></p><p><h4>3.2.2 Interpretación de Métricas</h4></p><p><strong>Fórmulas:</strong>
+</code>`<code>
+exact_duplicates    = occurrences - count(distinct _row_hash)
+dupes_w_variations  = max(0, count(distinct _row_hash) - 1)
+</code>`<code></p><p><strong>Escenarios típicos:</strong></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Caso</th>
+<th>occurrences</th>
+<th>exact_dup</th>
+<th>dupes_w_var</th>
+<th>variations</th>
+<th>Interpretación</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>A</strong></td>
+<td>1</td>
+<td>-</td>
+<td>-</td>
+<td>-</td>
+<td>✅ <strong>No duplicado</strong> (no aparece en tabla)</td>
+</tr>
+<tr>
+<td><strong>B</strong></td>
+<td>3</td>
+<td>2</td>
+<td>0</td>
+<td></code>-<code></td>
+<td>3 filas idénticas (copias exactas)</td>
+</tr>
+<tr>
+<td><strong>C</strong></td>
+<td>3</td>
+<td>1</td>
+<td>1</td>
+<td></code>amount: [100,200]<code></td>
+<td>2 filas iguales + 1 con amount diferente</td>
+</tr>
+<tr>
+<td><strong>D</strong></td>
+<td>5</td>
+<td>0</td>
+<td>4</td>
+<td></code>status: [A,B,C,D,E]<code></td>
+<td>5 filas todas distintas (máxima variación)</td>
+</tr>
+</tbody></table></p><p><strong>Ejemplo real:</strong>
+</code>`<code>
+origin="ref", id="TXN_123_CUST_456", category="both"
+exact_duplicates="2", dupes_w_variations="1", occurrences="4"
+variations="amount: [100.00,100.50] | status: [ACTIVE,PENDING]"</p><p>→ Interpretación:
+  • 4 filas con esta clave en REF
+  • 2 copias exactas (mismo hash)
+  • 2 grupos con variaciones distintas
+  • Varían los campos: amount (2 valores) y status (2 valores)
+</code>`<code></p><p><h4>3.2.3 Columna </code>category<code> - Coherencia con Summary</h4></p><p>La columna </code>category<code> categoriza cada ID duplicado según su presencia en REF/NEW:</p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Category</th>
+<th>Significado</th>
+<th>Ejemplo</th>
+</tr></thead><tbody>
+<tr>
+<td></code>both<code></td>
+<td>ID duplicado en <strong>ambas</strong> tablas</td>
+<td>ID aparece 2+ veces en REF <strong>Y</strong> 2+ veces en NEW</td>
+</tr>
+<tr>
+<td></code>only_ref<code></td>
+<td>ID duplicado <strong>solo en REF</strong></td>
+<td>ID aparece 2+ veces en REF pero 0 o 1 vez en NEW</td>
+</tr>
+<tr>
+<td></code>only_new<code></td>
+<td>ID duplicado <strong>solo en NEW</strong></td>
+<td>ID aparece 2+ veces en NEW pero 0 o 1 vez en REF</td>
+</tr>
+</tbody></table></p><p><strong>Coherencia con </code>summary.DUPS<code>:</strong>
+</code>`<code>sql
+-- Ambos reportan las mismas categorías con los mismos criterios
+SELECT category, COUNT(DISTINCT id) FROM duplicates GROUP BY category;
+-- ↓ coincide con ↓
+SELECT metric, numerator FROM summary WHERE block = 'DUPS';
+</code>`<code></p><p><h4>3.2.4 Queries Útiles</h4></p><p></code>`<code>sql
+-- 1. Ver solo duplicados problemáticos (con variaciones)
+SELECT origin, id, category, occurrences, dupes_w_variations, variations
+FROM comparison_duplicates
+WHERE dupes_w_variations > 0
+ORDER BY CAST(occurrences AS INT) DESC;</p><p>-- 2. Duplicados solo por copias exactas (sin variaciones)
+SELECT origin, id, category, exact_duplicates, occurrences
+FROM comparison_duplicates
+WHERE exact_duplicates > 0 AND dupes_w_variations = 0
+ORDER BY CAST(exact_duplicates AS INT) DESC;</p><p>-- 3. Duplicados problemáticos en ambos lados (categoría "both")
+SELECT origin, id, occurrences, variations
+FROM comparison_duplicates
+WHERE category = 'both' AND dupes_w_variations > 0
+ORDER BY origin, CAST(occurrences AS INT) DESC;</p><p>-- 4. Top 10 IDs con más ocurrencias
+SELECT origin, id, occurrences, exact_duplicates, variations
+FROM comparison_duplicates
+ORDER BY CAST(occurrences AS INT) DESC
+LIMIT 10;</p><p>-- 5. Análisis de campos que más varían
+SELECT 
+  origin,
+  COUNT(DISTINCT id) as affected_ids,
+  SUM(CASE WHEN variations LIKE '%amount:%' THEN 1 ELSE 0 END) as vary_amount,
+  SUM(CASE WHEN variations LIKE '%status:%' THEN 1 ELSE 0 END) as vary_status
+FROM comparison_duplicates
+WHERE dupes_w_variations > 0
+GROUP BY origin;
+</code>`<code></p><p><h4>3.2.5 Parámetro </code>priorityCol<code> - Resolución Inteligente de Duplicados</h4></p><p><strong>¿Qué hace?</strong> Filtra duplicados <strong>antes</strong> del análisis, manteniendo solo la fila con <strong>mayor prioridad</strong> dentro de cada grupo (clave + origen).</p><p><strong>¿Cuándo usarlo?</strong></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Escenario</th>
+<th>¿Usar priorityCol?</th>
+<th>Columna recomendada</th>
+</tr></thead><tbody>
+<tr>
+<td>Tabla snapshot (1 fila por ID, datos estáticos)</td>
+<td>❌ No necesario</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Tabla histórica con versiones (CDC, SCD Type 2)</td>
+<td>✅ <strong>Sí</strong></td>
+<td></code>version<code>, </code>update_timestamp<code>, </code>effective_date<code></td>
+</tr>
+<tr>
+<td>Tabla con retries/reprocessing (mismo ID, múltiples intentos)</td>
+<td>✅ <strong>Sí</strong></td>
+<td></code>processing_timestamp<code>, </code>retry_count<code></td>
+</tr>
+<tr>
+<td>Tabla transaccional (cada fila es única por diseño)</td>
+<td>❌ No necesario</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Tabla con múltiples updates del mismo registro</td>
+<td>✅ <strong>Sí</strong></td>
+<td></code>last_modified_date<code>, </code>sequence_number<code></td>
+</tr>
+</tbody></table></p><p><strong>Cómo funciona:</strong></p><p></code>`<code>scala
+// Pseudocódigo interno
+Window.partitionBy(origin, key1, key2, ...)  // Agrupa por origen + clave
+      .orderBy(priorityCol DESC NULLS LAST)  // Ordena: valores altos primero, NULL al final
+      
+→ Selecciona row_number() = 1  (fila con valor MÁS ALTO)
+</code>`<code></p><p><strong>Criterios de ordenación:</strong>
+<ul>
+<li>✅ <strong>Valores altos tienen prioridad</strong>: </code>1000 > 100 > 10<code></li>
+<li>✅ <strong>Timestamps más recientes primero</strong>: </code>2025-11-21 > 2025-11-20<code></li>
+<li>✅ <strong>NULLs al final (menor prioridad)</strong>: Se descartan si existen valores no-NULL</li>
+</ul></p><p><strong>Ejemplo - Tabla con múltiples updates:</strong></p><p></code>`<code>sql
+-- ANTES de priorityCol (datos crudos)
+REF table:
+┌───────┬─────────────────────┬────────┬────────┐
+│ id    │ update_timestamp    │ status │ amount │
+├───────┼─────────────────────┼────────┼────────┤
+│ 123   │ 2025-11-21 10:00:00 │ A      │ 100    │  ← Update v1
+│ 123   │ 2025-11-21 10:05:00 │ A      │ 100    │  ← Update v2 (sin cambios)
+│ 123   │ 2025-11-21 10:10:00 │ I      │ 200    │  ← Update v3 (cambió) ✓ MÁS RECIENTE
+└───────┴─────────────────────┴────────┴────────┘</p><p>SIN priorityCol:
+→ Detecta duplicado: 3 filas con id=123
+→ exact_duplicates="1" (2 filas iguales)
+→ dupes_w_variations="2" (3 hashes distintos)
+→ occurrences="3"
+→ variations="status: [A,I] | amount: [100,200]"</p><p>CON priorityCol="update_timestamp":
+→ Filtro previo: solo mantiene fila con 10:10:00 (timestamp más alto)
+→ Resultado: 1 sola fila por id=123
+→ NO se reporta como duplicado (occurrences=1 → no entra en tabla)
+</code>`<code></p><p><strong>Uso en ejecución:</strong></p><p></code>`<code>bash
+<h1>Ejemplo 1: Tabla histórica con timestamps</h1>
+spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=default.transactions_history \
+  newTable=default.transactions_current \
+  compositeKeyCols=transaction_id \
+  partitionSpec="data_date_part=2025-11-21/" \
+  priorityCol=update_timestamp \
+  checkDuplicates=true \
+  ...</p><p><h1>Ejemplo 2: Tabla con versionado numérico</h1>
+priorityCol=version_number</p><p><h1>Ejemplo 3: Tabla CDC con secuencia</h1>
+priorityCol=sequence_id</p><p><h1>Ejemplo 4: Tabla con flag de prioridad explícito</h1>
+priorityCol=priority_flag  # (valores: 1=alta, 0=baja)
+</code>`<code></p><p><strong>Validaciones automáticas:</strong>
+<ul>
+<li>✅ Si </code>priorityCol<code> no existe en el schema → Se ignora (sin error)</li>
+<li>✅ Si </code>priorityCol<code> es NULL/vacío → Se ignora</li>
+<li>✅ Si la columna existe → Se aplica correctamente</li>
+</ul></p><p><strong>Impacto en métricas:</strong></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Métrica</th>
+<th>Sin priorityCol</th>
+<th>Con priorityCol</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Filas procesadas</strong></td>
+<td>Todas las filas</td>
+<td>Solo filas con máxima prioridad</td>
+</tr>
+<tr>
+<td><strong>Duplicados detectados</strong></td>
+<td>Incluye versiones intermedias</td>
+<td>Solo duplicados "reales"</td>
+</tr>
+<tr>
+<td><strong>Global Quality</strong></td>
+<td>Penalizado por versiones</td>
+<td>Refleja calidad real</td>
+</tr>
+<tr>
+<td><strong>Performance</strong></td>
+<td>Más I/O y procesamiento</td>
+<td>Menor volumen, más rápido</td>
+</tr>
+</tbody></table></p><p><strong>💡 Recomendación:</strong>
+<ul>
+<li>Si tu tabla tiene campos como </code>update_timestamp<code>, </code>version<code>, </code>last_modified_date<code> → <strong>Usa </code>priorityCol<code></strong></li>
+<li>Si cada fila es única por diseño → No uses </code>priorityCol<code> (añade overhead innecesario)</li>
+</ul></p><p>---</p><p><h3>3.3 Tabla summary - Vista Rápida</h3></p><p><strong>¿Qué muestra?</strong> KPIs de alto nivel: tamaños, intersección, gaps, calidad global.</p><p></code>`<code>sql
+-- Ver resumen completo
+SELECT block, metric, universe, numerator, denominator, pct, samples
+FROM comparison_summary
+ORDER BY block, metric;
+</code>`<code></p><p><strong>Bloques principales:</strong></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Block</th>
+<th>Métricas</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>KPIS</strong></td>
+<td>Unique IDs (REF/NEW), Total rows, Total diff, <strong>Global quality</strong></td>
+</tr>
+<tr>
+<td><strong>EXACT MATCH</strong></td>
+<td>1:1 con todas las columnas idénticas</td>
+</tr>
+<tr>
+<td><strong>PARTIAL MATCH</strong></td>
+<td>1:1 con al menos una columna diferente</td>
+</tr>
+<tr>
+<td><strong>GAP</strong></td>
+<td>1:0 (solo en REF), 0:1 (solo en NEW)</td>
+</tr>
+<tr>
+<td><strong>DUPS</strong></td>
+<td>Duplicados en ambos lados, solo REF, solo NEW</td>
+</tr>
+</tbody></table></p><p><strong>Métrica clave: Global Quality</strong></p><p></code>`<code>
+Global quality = (claves con EXACT_MATCH sin duplicados) / (total claves REF) * 100</p><p>¿Puedo reemplazar la tabla? → Global quality > 95% es buen indicador
+</code>`<code></p><p>---</p><p><h2>4. Casos de Uso Comunes</h2></p><p><h3>4.1 Comparación Simple (Mismo Día, Misma Estructura)</h3></p><p></code>`<code>bash
+spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=default.payments_old \
+  newTable=default.payments_new \
+  compositeKeyCols=txn_id,customer_id \
+  partitionSpec="geo=ES/data_date_part=2025-11-19/" \
+  ignoreCols=load_ts,audit_user \
+  initiativeName=PaymentsComparison \
+  tablePrefix=default.cmp_ \
+  outputBucket=s3a://bucket/comparisons \
+  executionDate=2025-11-19 \
+  checkDuplicates=true
+</code>`<code></p><p><h3>4.2 Comparación con Ventanas Temporales Diferentes</h3></p><p></code>`<code>bash
+<h1>REF: 7 días históricos, NEW: Hoy + 1 día futuro</h1>
+spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=default.transactions_ref \
+  newTable=default.transactions_new \
+  compositeKeyCols=id \
+  partitionSpec="geo=*/data_date_part=2025-11-19/" \
+  refWindowDays=-7..0 \
+  newWindowDays=0..+1 \
+  initiativeName=WindowComparison \
+  tablePrefix=default.cmp_ \
+  outputBucket=s3a://bucket/comparisons \
+  executionDate=2025-11-19
+</code>`<code></p><p><h3>4.3 Comparación con Particiones Completamente Diferentes</h3></p><p></code>`<code>bash
+<h1>REF: 1 día + 1 proceso, NEW: 19 meses + múltiples procesos</h1>
+spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=default.old_payments \
+  newTable=default.new_payments \
+  compositeKeyCols=payment_id \
+  refPartitionSpec="data_date_part=2025-11-05/process_group=guarantees" \
+  newPartitionSpec="data_date_part=[2024-05-01,2024-06-01,2024-07-01,2024-08-01,2024-09-01,2024-10-01,2024-11-01,2024-12-01,2025-01-01,2025-02-01,2025-03-01,2025-04-01,2025-05-01,2025-06-01,2025-07-01,2025-08-01,2025-09-01,2025-10-01,2025-11-01]/process_name=(Cash|Guarantees|Swift)" \
+  initiativeName=HistoricalMigration \
+  tablePrefix=default.cmp_ \
+  outputBucket=s3a://bucket/comparisons \
+  executionDate=2025-11-19
+</code>`<code></p><p><h3>4.4 Comparación con Filtros SQL Personalizados</h3></p><p></code>`<code>bash
+<h1>Solo transacciones de hora 06:xx en España y Francia para REF</h1>
+<h1>Excluyendo Brasil en NEW</h1>
+spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=default.swift_ref \
+  newTable=default.swift_new \
+  compositeKeyCols=uetr,message_type \
+  partitionSpec="data_date_part=2025-10-01/" \
+  refFilter="geo IN ('ES','FR') AND time LIKE '06:%'" \
+  newFilter="geo NOT IN ('BR') AND amount >= 1000" \
+  ignoreCols=session_sequence,data_timestamp_part \
+  initiativeName=SwiftFiltered \
+  tablePrefix=default.cmp_ \
+  outputBucket=s3a://bucket/comparisons \
+  executionDate=2025-10-01 \
+  checkDuplicates=true
+</code>`<code></p><p><h3>4.5 Comparación con Resolución Automática de Duplicados (priorityCol)</h3></p><p></code>`<code>bash
+<h1>Tabla histórica con múltiples versiones/updates del mismo registro</h1>
+<h1>priorityCol mantiene solo la fila con timestamp más alto por cada ID</h1>
+spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=default.transactions_history \
+  newTable=default.transactions_current \
+  compositeKeyCols=transaction_id \
+  partitionSpec="data_date_part=2025-11-21/" \
+  priorityCol=update_timestamp \
+  checkDuplicates=true \
+  initiativeName=HistoryComparison \
+  tablePrefix=default.cmp_ \
+  outputBucket=s3a://bucket/comparisons \
+  executionDate=2025-11-21</p><p><h1>✅ Beneficio: Solo detecta duplicados "reales", no versiones intermedias</h1>
+<h1>✅ Resultado: Global Quality más preciso (no penalizado por updates)</h1>
+</code>`<code></p><p><strong>Casos ideales para </code>priorityCol<code>:</strong>
+<ul>
+<li>Tablas CDC (Change Data Capture) → </code>priorityCol=op_timestamp<code></li>
+<li>Tablas versionadas → </code>priorityCol=version_number<code></li>
+<li>Tablas con reprocessing → </code>priorityCol=processing_timestamp<code></li>
+<li>Tablas SCD Type 2 → </code>priorityCol=effective_date<code></li>
+</ul></p><p><h3>4.6 Comparación de Tablas con Esquemas Diferentes</h3></p><p></code>`<code>bash
+<h1>REF tiene columna 'process_group', NEW tiene 'process_name'</h1>
+<h1>El motor compara automáticamente solo columnas comunes</h1>
+spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
+  cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
+  refTable=default.legacy_table \
+  newTable=default.migrated_table \
+  compositeKeyCols=id,geo \
+  partitionSpec="data_date_part=2025-11-19/" \
+  ignoreCols=process_group,process_name \
+  initiativeName=SchemaMismatch \
+  tablePrefix=default.cmp_ \
+  outputBucket=s3a://bucket/comparisons \
+  executionDate=2025-11-19
+</code>`<code></p><p>---</p><p><h3>4.6 Configuración para Postman (Actualizada Nov 2025)</h3></p><p><strong>Endpoint típico:</strong> </code>POST https://your-spark-cluster/api/jobs<code></p><p><strong>Body (JSON):</strong>
+</code>`<code>json
+{
+  "class": "com.santander.cib.adhc.internal_aml_tools.Main",
+  "appResource": "s3a://artifacts/cib-adhc-internaltools-1.0.5-SNAPSHOT.jar",
+  "sparkProperties": {
+    "spark.master": "yarn",
+    "spark.submit.deployMode": "cluster",
+    "spark.driver.memory": "4g",
+    "spark.executor.memory": "8g",
+    "spark.executor.cores": "4",
+    "spark.dynamicAllocation.enabled": "true",
+    "spark.sql.adaptive.enabled": "true",
+    "spark.sql.hive.convertMetastoreParquet": "true"
+  },
+  "arguments": [
+    "refTable=scib_cm_cmplnc_trans_messages_swift_s3.swift_transactions",
+    "newTable=scib_bu_cmplnc_trans_messages_swift_s3.swift_transactions_new",
+    "compositeKeyCols=geo,uetr,type,in_out,message_type,validation_type,rejected",
+    "partitionSpec=data_date_part=2025-11-20/",
+    "ignoreCols=session_sequence,data_timestamp_part,ingestion_ts",
+    "initiativeName=Swift_Nov2025",
+    "tablePrefix=scib_bu_cmplnc_trans_messages_swift_s3.results_",
+    "outputBucket=s3a://scib-pre-bu-cmplnc-trans-messages/internal-tools",
+    "executionDate=2025-11-20",
+    "checkDuplicates=true",
+    "includeEqualsInDiff=false",
+    "priorityCol=update_timestamp",
+    "refFilter=geo IN ('ES','FR') AND time LIKE '06:%'",
+    "newFilter=geo NOT IN ('BR')"
+  ]
+}
+</code>`<code></p><p><strong>Headers necesarios:</strong>
+</code>`<code>
+Content-Type: application/json
+Authorization: Bearer <your-token>
+X-Requested-By: postman
+</code>`<code></p><p>---</p><p><h3>4.7 Configuración para Airflow DAG (Actualizada Nov 2025)</h3></p><p><strong>Variable Airflow - </code>table_comparison_config<code>:</strong></p><p></code>`<code>json
+{
+  "spark_submit_config": {
+    "class": "com.santander.cib.adhc.internal_aml_tools.Main",
+    "jar_path": "s3a://scib-pre-bu-artifacts/cib-adhc-internaltools-1.0.5-SNAPSHOT.jar",
+    "spark_conf": {
+      "spark.master": "yarn",
+      "spark.submit.deployMode": "cluster",
+      "spark.driver.memory": "4g",
+      "spark.executor.memory": "8g",
+      "spark.executor.cores": "4",
+      "spark.num.executors": "10",
+      "spark.dynamicAllocation.enabled": "true",
+      "spark.sql.adaptive.enabled": "true",
+      "spark.sql.adaptive.coalescePartitions.enabled": "true",
+      "spark.sql.hive.convertMetastoreParquet": "true"
+    }
+  },
+  "comparison_params": {
+    "refTable": "{{ var.value.ref_table }}",
+    "newTable": "{{ var.value.new_table }}",
+    "compositeKeyCols": "transaction_id,customer_id,geo",
+    "partitionSpec": "data_date_part={{ ds }}/",
+    "ignoreCols": "ingestion_ts,audit_user,version,load_date",
+    "initiativeName": "{{ var.value.initiative_name }}",
+    "tablePrefix": "{{ var.value.schema }}.comparison_",
+    "outputBucket": "s3a://{{ var.value.bucket }}/comparisons",
+    "executionDate": "{{ ds }}",
+    "checkDuplicates": "true",
+    "includeEqualsInDiff": "false",
+    "priorityCol": "update_timestamp"
+  },
+  "advanced_params": {
+    "refWindowDays": "-7..0",
+    "newWindowDays": "0..+1",
+    "refFilter": "amount >= 1000 AND status = 'ACTIVE'",
+    "newFilter": "geo NOT IN ('BR','MX')"
+  }
+}
+</code>`<code></p><p><strong>Ejemplo DAG Python:</strong></p><p></code>`<code>python
+from airflow import DAG
+from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.models import Variable
+from datetime import datetime, timedelta</p><p><h1>Cargar configuración</h1>
+config = Variable.get("table_comparison_config", deserialize_json=True)</p><p>default_args = {
+    'owner': 'data-quality',
+    'depends_on_past': False,
+    'start_date': datetime(2025, 11, 1),
+    'email_on_failure': True,
+    'email': ['data-quality-team@santander.com'],
+    'retries': 2,
+    'retry_delay': timedelta(minutes=5)
+}</p><p>dag = DAG(
+    'table_comparison_daily',
+    default_args=default_args,
+    description='Comparación diaria de tablas',
+    schedule_interval='0 6 <em> </em> *',  # 6 AM diario
+    catchup=False,
+    tags=['data-quality', 'table-comparison']
+)</p><p><h1>Construir argumentos</h1>
+spark_conf = config['spark_submit_config']['spark_conf']
+params = config['comparison_params']
+advanced = config.get('advanced_params', {})</p><p>arguments = [
+    f"refTable={params['refTable']}",
+    f"newTable={params['newTable']}",
+    f"compositeKeyCols={params['compositeKeyCols']}",
+    f"partitionSpec={params['partitionSpec']}",
+    f"ignoreCols={params['ignoreCols']}",
+    f"initiativeName={params['initiativeName']}",
+    f"tablePrefix={params['tablePrefix']}",
+    f"outputBucket={params['outputBucket']}",
+    f"executionDate={params['executionDate']}",
+    f"checkDuplicates={params['checkDuplicates']}",
+    f"includeEqualsInDiff={params['includeEqualsInDiff']}"
+]</p><p><h1>Añadir parámetros avanzados si existen</h1>
+if 'refWindowDays' in advanced:
+    arguments.append(f"refWindowDays={advanced['refWindowDays']}")
+if 'newWindowDays' in advanced:
+    arguments.append(f"newWindowDays={advanced['newWindowDays']}")
+if 'refFilter' in advanced:
+    arguments.append(f"refFilter={advanced['refFilter']}")
+if 'newFilter' in advanced:
+    arguments.append(f"newFilter={advanced['newFilter']}")</p><p>table_comparison_task = SparkSubmitOperator(
+    task_id='run_table_comparison',
+    application=config['spark_submit_config']['jar_path'],
+    java_class=config['spark_submit_config']['class'],
+    conf=spark_conf,
+    application_args=arguments,
+    dag=dag
+)</p><p><h1>Tarea de validación post-comparación</h1>
+from airflow.providers.amazon.aws.operators.athena import AthenaOperator</p><p>validate_results = AthenaOperator(
+    task_id='validate_comparison_results',
+    query="""
+        SELECT 
+            metric,
+            numerator,
+            denominator,
+            pct
+        FROM {{ var.value.schema }}.comparison_summary
+        WHERE initiative = '{{ var.value.initiative_name }}'
+        AND data_date_part = '{{ ds }}'
+        AND metric = 'Global quality'
+        AND CAST(REPLACE(pct, '%', '') AS DOUBLE) < 95.0
+    """,
+    database='{{ var.value.database }}',
+    output_location='s3://{{ var.value.bucket }}/athena-results/',
+    dag=dag
+)</p><p>table_comparison_task >> validate_results
+</code>`<code></p><p><strong>Variables Airflow necesarias:</strong></p><p></code>`<code>json
+{
+  "ref_table": "scib_cm_schema.payments_ref",
+  "new_table": "scib_bu_schema.payments_new",
+  "initiative_name": "PaymentsMigration_Nov2025",
+  "schema": "scib_bu_schema",
+  "bucket": "scib-pre-bu-data-quality",
+  "database": "data_quality_db"
+}
+</code>`<code></p><p>---</p><p><h2>5. Diagnóstico y Troubleshooting</h2></p><p><h3>5.1 Guía de Diagnóstico Rápido</h3></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Síntoma</th>
+<th>Tabla a Revisar</th>
+<th>Query</th>
+<th>Interpretación</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Global quality bajo</strong></td>
+<td></code>summary<code></td>
+<td></code>WHERE metric='Global quality'<code></td>
+<td>Revisar % PARTIAL MATCH y duplicados</td>
+</tr>
+<tr>
+<td><strong>Muchas diferencias</strong></td>
+<td></code>differences<code></td>
+<td></code>WHERE results='NO_MATCH' GROUP BY column<code></td>
+<td>Identificar columnas problemáticas</td>
+</tr>
+<tr>
+<td><strong>GAP alto (1:0 o 0:1)</strong></td>
+<td></code>summary<code></td>
+<td></code>WHERE block='GAP'<code></td>
+<td>Verificar </code>partitionSpec<code> y filtros</td>
+</tr>
+<tr>
+<td><strong>Duplicados</strong></td>
+<td></code>duplicates<code></td>
+<td></code>WHERE dupes_w_variations > 0<code></td>
+<td>Revisar calidad datos upstream</td>
+</tr>
+<tr>
+<td><strong>Nulls inesperados</strong></td>
+<td></code>differences<code></td>
+<td></code>WHERE value_new='-' OR value_ref='-'<code></td>
+<td>Verificar mappings ETL</td>
+</tr>
+</tbody></table></p><p><h3>5.2 Queries de Diagnóstico</h3></p><p></code>`<code>sql
+-- 1. Top 10 columnas con más diferencias
+SELECT column, COUNT(*) as mismatch_count
+FROM comparison_differences
+WHERE results = 'NO_MATCH'
+GROUP BY column
+ORDER BY mismatch_count DESC
+LIMIT 10;</p><p>-- 2. Claves con duplicados en ambos lados (problema sistémico)
+SELECT d1.id, d1.occurrences as ref_occ, d2.occurrences as new_occ
+FROM comparison_duplicates d1
+JOIN comparison_duplicates d2 ON d1.id = d2.id
+WHERE d1.origin = 'ref' AND d2.origin = 'new';</p><p>-- 3. Claves con PARTIAL MATCH (al menos una columna difiere)
+SELECT DISTINCT id
+FROM comparison_differences
+WHERE results = 'NO_MATCH';</p><p>-- 4. Verificar si hay claves con valores vacíos
+SELECT * FROM comparison_differences
+WHERE id = 'NULL'
+LIMIT 100;</p><p>-- 5. Resumen de resultados por etiqueta
+SELECT results, COUNT(*) as cnt
+FROM comparison_differences
+GROUP BY results
+ORDER BY cnt DESC;
+</code>`<code></p><p><h3>5.3 Problemas Comunes y Soluciones</h3></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Problema</th>
+<th>Causa Probable</th>
+<th>Solución</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Error: "Task not serializable"</strong></td>
+<td>Tabla usa HiveTableScan</td>
+<td>Recrear tabla con </code>USING parquet<code></td>
+</tr>
+<tr>
+<td><strong>Error: "UNRESOLVED_COLUMN"</strong></td>
+<td>Columnas diferentes entre REF/NEW</td>
+<td>Verificar schema, añadir a </code>ignoreCols<code></td>
+</tr>
+<tr>
+<td><strong>Muchos </code>id="NULL"<code></strong></td>
+<td>Claves vacías concentradas</td>
+<td>Rellenar keys en ingesta o filtrar</td>
+</tr>
+<tr>
+<td><strong>Diferencias en espacios</strong></td>
+<td></code>"ES "<code> vs </code>"ES"<code></td>
+<td>Normalizar con </code>TRIM()<code> antes de comparar</td>
+</tr>
+<tr>
+<td><strong>Performance lento</strong></td>
+<td></code>LIKE '%pattern%'<code> en filtros</td>
+<td>Usar </code>LIKE 'pattern%'<code> o </code>partitionSpec<code></td>
+</tr>
+<tr>
+<td><strong>Duplicados altos</strong></td>
+<td>Cargas repetidas upstream</td>
+<td>Deduplicar antes de comparar</td>
+</tr>
+</tbody></table></p><p><h3>5.4 Interpretación de Logs</h3></p><p></code>`<code>
+[SCHEMA] REF cols=120 | NEW cols=118
+→ REF tiene 2 columnas más que NEW</p><p>[SCHEMA] ✓ Columns only in REF (2): old_field1, deprecated_field2
+→ Estas columnas no se compararán (marcarán ONLY_IN_REF en differences)</p><p>[SCHEMA] Type/nullability differences (5):
+<ul>
+<li>amount: type-mismatch | type decimal(10,2) vs decimal(12,4)</li>
+</ul>
+→ Comparación numérica seguirá funcionando, pero revisar precisión</p><p>[FILTER] ✓ Applied on 'ref': geo IN ('ES','FR')
+[FILTER]   Rows: 1000000 → 150000 (15.00%)
+→ Filtro SQL redujo filas a 15% (esperado)</p><p>[PARTITIONS] ✓ Filtered input files: REF=20 files, NEW=57 files
+→ Particiones cargadas correctamente</p><p>[INFO] Excluding constant columns with SAME value on both sides: audit_version,load_date
+→ Columnas constantes excluidas automáticamente (reduce ruido)
+</code>`<code></p><p>---</p><p><h1>PARTE II: REFERENCIA TÉCNICA</h1></p><p>---</p><p><h2>6. Arquitectura del Motor</h2></p><p><h3>6.1 Flujo de Ejecución</h3></p><p></code>`<code>
+Main.scala → TableComparatorApp → TableComparisonController
+│
+├─ 1. Configuración Inicial
+│   ├─ Parseo argumentos KV
+│   ├─ Habilitación DataSource readers (anti-serialization)
+│   └─ Validación tablas destino
+│
+├─ 2. Carga de Datos
+│   ├─ PartitionPruning (wildcards + overrides + ventanas)
+│   ├─ SchemaChecker (validación compatibilidad)
+│   └─ Aplicación filtros SQL personalizados
+│
+├─ 3. Preparación
+│   ├─ Normalización keys vacías → NULL
+│   ├─ Exclusión columnas constantes idénticas
+│   ├─ Selección columnas comparables (comunes a ambos lados)
+│   └─ Reparticionamiento inteligente
+│
+├─ 4. Comparación (DiffGenerator)
+│   ├─ Agregación por key (MAX/MIN/FIRST según tipo)
+│   ├─ FULL OUTER JOIN null-safe
+│   └─ Etiquetado: EXACT_MATCH/MATCH/NO_MATCH/ONLY_IN_*
+│
+├─ 5. Análisis Duplicados (DuplicateDetector)
+│   ├─ Hash SHA256 null-safe por fila
+│   ├─ Agrupación por origin + keys
+│   └─ Conteo: exact_dups, variations, occurrences
+│
+├─ 6. Generación Métricas (SummaryGenerator)
+│   ├─ KPIs: tamaños, intersección, gaps
+│   └─ Global quality: (exact_match sin dups) / total_ref
+│
+└─ 7. Escritura Resultados
+    ├─ differences (mode=Overwrite, particionado)
+    ├─ duplicates (mode=Overwrite, particionado)
+    └─ summary (mode=Overwrite, particionado)
+</code>`<code></p><p><h3>6.2 Componentes Clave</h3></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Componente</th>
+<th>Responsabilidad</th>
+<th>Ubicación</th>
+</tr></thead><tbody>
+<tr>
+<td></code>Main.scala<code></td>
+<td>Entry point, routing, SparkSession</td>
+<td></code>internal_aml_tools/Main.scala<code></td>
+</tr>
+<tr>
+<td></code>TableComparatorApp<code></td>
+<td>Parsing args KV, construcción config</td>
+<td></code>app/table_comparator/TableComparatorApp.scala<code></td>
+</tr>
+<tr>
+<td></code>TableComparisonController<code></td>
+<td>Orquestador principal</td>
+<td></code>app/table_comparator/TableComparisonController.scala<code></td>
+</tr>
+<tr>
+<td></code>PartitionPruning<code></td>
+<td>Resolución wildcards, filtrado particiones</td>
+<td></code>app/table_comparator/PartitionPruning.scala<code></td>
+</tr>
+<tr>
+<td></code>SchemaChecker<code></td>
+<td>Validación y logging de esquemas</td>
+<td></code>app/table_comparator/SchemaChecker.scala<code></td>
+</tr>
+<tr>
+<td></code>DiffGenerator<code></td>
+<td>Lógica comparación columna por columna</td>
+<td></code>app/table_comparator/DiffGenerator.scala<code></td>
+</tr>
+<tr>
+<td></code>DuplicateDetector<code></td>
+<td>Detección y análisis duplicados</td>
+<td></code>app/table_comparator/DuplicateDetector.scala<code></td>
+</tr>
+<tr>
+<td></code>SummaryGenerator<code></td>
+<td>Cálculo métricas agregadas</td>
+<td></code>app/table_comparator/SummaryGenerator.scala<code></td>
+</tr>
+</tbody></table></p><p>---</p><p><h2>7. Schema y Semántica de Salidas</h2></p><p><h3>7.1 Tabla </code>result_differences<code></h3></p><p><strong>Schema:</strong>
+</code>`<code>
+id              STRING    -- Composite key (NULL-safe, "_" separated)
+column          STRING    -- Column name being compared
+value_ref       STRING    -- Value in reference table (formatted)
+value_new       STRING    -- Value in new table (formatted)
+results         STRING    -- Comparison result tag
+initiative      STRING    -- Label from initiativeName param
+data_date_part  STRING    -- Execution date (ISO)
+</code>`<code></p><p><strong>Etiquetas de Resultados:</strong></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Tag</th>
+<th>Significado</th>
+<th>Cuándo aparece</th>
+</tr></thead><tbody>
+<tr>
+<td></code>EXACT_MATCH<code></td>
+<td><strong>Todas</strong> las columnas idénticas</td>
+<td>Registro existe en ambos lados y todos los valores coinciden</td>
+</tr>
+<tr>
+<td></code>MATCH<code></td>
+<td>Columna específica idéntica</td>
+<td>Registro en ambos lados, valor columna coincide</td>
+</tr>
+<tr>
+<td></code>NO_MATCH<code></td>
+<td>Columna específica difiere</td>
+<td>Registro en ambos lados, valor columna difiere</td>
+</tr>
+<tr>
+<td></code>ONLY_IN_REF<code></td>
+<td>Solo en tabla referencia</td>
+<td>Registro o columna solo existe en REF</td>
+</tr>
+<tr>
+<td></code>ONLY_IN_NEW<code></td>
+<td>Solo en tabla nueva</td>
+<td>Registro o columna solo existe en NEW</td>
+</tr>
+</tbody></table></p><p><strong>Cómo se Calcula (Vista Funcional)</strong></p><p><strong>Paso 1: Normalización de Keys Vacías</strong>
+</code>`<code>scala
+// DiffGenerator.scala línea 115
+// Keys vacías → NULL (permite null-safe equality en joins)
+normalizeKeysToNull(df, compositeKeyCols)
+</code>`<code>
+<ul>
+<li>Valores vacíos en columnas clave → <strong>NULL</strong></li>
+<li>Todas las filas sin key → agrupadas bajo </code>id="NULL"<code></li>
+<li>Afecta intersección y denominadores en summary</li>
+</ul></p><p><strong>Paso 2: Exclusión Automática de Columnas Constantes</strong>
+</code>`<code>scala
+// DiffGenerator.scala líneas 190-215
+// Calcula countDistinct en una sola agregación por lado
+constantStats(df, candidateCols)
+// Excluye columnas con <=1 valor distinto Y mismo valor en ambos lados
+</code>`<code>
+<ul>
+<li>Si columna tiene <strong>mismo valor constante</strong> en REF y NEW → <strong>excluida automáticamente</strong></li>
+<li>Evita ruido en tablas anchas</li>
+<li><strong>Log</strong>: </code>[INFO] Excluding constant columns with SAME value on both sides: col1,col2<code></li>
+</ul></p><p><strong>Paso 3: Política de Prioridad (Opcional)</strong>
+</code>`<code>scala
+// DiffGenerator.scala líneas 148-155
+// Si priorityCol definido: top-1 por key ordenado desc_nulls_last
+preOrderByPriority(df, keys, config)
+</code>`<code>
+<ul>
+<li>Si </code>priorityCol<code> configurado → <strong>solo se mantiene fila con mayor prioridad</strong> por key</li>
+<li>Estabiliza resultado ante duplicados operacionales</li>
+<li>Duplicados siguen visibles en </code>result_duplicates<code></li>
+</ul></p><p><strong>Paso 4: Valor Representativo por Key</strong></p><p>Cuando una key aparece múltiples veces, se elige <strong>un valor por columna</strong> para comparar:</p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Tipo de Dato</th>
+<th>Estrategia Default</th>
+<th>Override Disponible</th>
+</tr></thead><tbody>
+<tr>
+<td>Numéricos/Decimal</td>
+<td></code>MAX<code></td>
+<td></code>"max"<code>, </code>"min"<code>, </code>"first_non_null"<code></td>
+</tr>
+<tr>
+<td>Date/Timestamp</td>
+<td></code>MAX<code></td>
+<td></code>"max"<code>, </code>"min"<code>, </code>"first_non_null"<code></td>
+</tr>
+<tr>
+<td>Boolean</td>
+<td></code>MAX<code></td>
+<td></code>"max"<code>, </code>"min"<code>, </code>"first_non_null"<code></td>
+</tr>
+<tr>
+<td>String</td>
+<td></code>MAX<code> (orden natural)</td>
+<td></code>"max"<code>, </code>"min"<code>, </code>"first_non_null"<code></td>
+</tr>
+<tr>
+<td>Map</td>
+<td></code>MAX<code> (después de ordenar entries y to_json)</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Array</td>
+<td></code>MAX<code> (to_json, orden importa)</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Struct</td>
+<td></code>MAX<code> (to_json)</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Binary</td>
+<td></code>MAX<code> (base64 encoding)</td>
+<td>-</td>
+</tr>
+</tbody></table></p><p></code>`<code>scala
+// DiffGenerator.scala líneas 220-235
+// Ejemplo: config.aggOverrides = Map("amount" -> "min", "status" -> "first")
+</code>`<code></p><p><strong>Paso 5: Política de Nulls en Keys</strong>
+</code>`<code>scala
+// CompareConfig.scala
+nullKeyMatches: Boolean = true  // Default</p><p>// DiffGenerator.scala línea 253
+// Join condition:
+if (nullKeyMatches) left <=> right  // NULL == NULL
+else (left.isNotNull && right.isNotNull && left === right)  // NULL != NULL
+</code>`<code></p><p><strong>Paso 6: Formato Fiel de Valores</strong>
+</code>`<code>scala
+// DiffGenerator.scala líneas 23-30
+formatValue(column, dataType)
+</code>`<code>
+<ul>
+<li><strong>Decimals</strong>: preservan escala para display (</code>1.000000000000000001<code>)</li>
+<li><strong>Comparación numérica</strong> (no textual): </code>1.0 == 1.00<code></li>
+<li><strong>Nulls/vacíos</strong>: mostrados como </code>"-"<code> para legibilidad</li>
+</ul></p><p><strong>Reglas de Comparación por Tipo (Implementación Real)</strong></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Tipo</th>
+<th>Canonicalización</th>
+<th>Comparación</th>
+<th>Observaciones</th>
+</tr></thead><tbody>
+<tr>
+<td>Numeric/Decimal</td>
+<td>Sin cambio</td>
+<td>Value equality</td>
+<td></code>1.0 == 1.00<code> ; </code>100.50 ≠ 100.49<code></td>
+</tr>
+<tr>
+<td>String</td>
+<td></code>when(isNull, null).otherwise(cast)<code></td>
+<td>Case-sensitive</td>
+<td>Espacios cuentan: </code>"ES␠" ≠ "ES"<code></td>
+</tr>
+<tr>
+<td>Date/Timestamp</td>
+<td>Sin cambio</td>
+<td>Exact equality</td>
+<td>-</td>
+</tr>
+<tr>
+<td>Boolean</td>
+<td>Sin cambio</td>
+<td>Exact equality</td>
+<td>-</td>
+</tr>
+<tr>
+<td><strong>Map</strong></td>
+<td></code>array_sort(map_entries) → to_json<code></td>
+<td>JSON string</td>
+<td><strong>Orden keys NO importa</strong></td>
+</tr>
+<tr>
+<td><strong>Array</strong></td>
+<td></code>to_json<code></td>
+<td>JSON string</td>
+<td><strong>Orden SÍ importa</strong></td>
+</tr>
+<tr>
+<td><strong>Struct</strong></td>
+<td></code>to_json<code></td>
+<td>JSON string</td>
+<td>Field-by-field via JSON</td>
+</tr>
+<tr>
+<td><strong>Binary</strong></td>
+<td></code>encode(base64)<code></td>
+<td>String equality</td>
+<td>Encoded as base64</td>
+</tr>
+</tbody></table></p><p></code>`<code>scala
+// DiffGenerator.scala líneas 32-48 (canonicalize function)
+</code>`<code></p><p><strong>Ejemplos de Comportamiento:</strong></p><p></code>`<code>sql
+-- Caso 1: Whitespace en strings
+id=2, column=country
+value_ref="ES " (con espacio)
+value_new="ES"
+results=NO_MATCH</p><p>-- Caso 2: Solo en un lado
+id=3 presente solo en REF
+→ Genera N filas (una por cada columna comparada):
+  id=3, column=amount,  value_ref=150.00, value_new="-", results=ONLY_IN_REF
+  id=3, column=country, value_ref=MX,     value_new="-", results=ONLY_IN_REF
+  ...</p><p>-- Caso 3: Keys vacías agregadas
+id="NULL" (varias filas con key vacía en ambos lados)
+→ Agregación puede resultar en MATCH si valor representativo coincide
+→ Variaciones internas visibles en result_duplicates
+</code>`<code></p><p><strong>Cómo Leer Efectivamente:</strong></p><p><ol>
+<li><strong>Filtrar diferencias reales:</strong></li>
+</ol>
+   </code>`<code>sql
+   SELECT * FROM result_differences
+   WHERE results NOT IN ('MATCH', 'EXACT_MATCH')
+   ORDER BY id, column
+   </code>`<code></p><p><ol>
+<li><strong>Investigar ONLY_IN_* masivos:</strong></li>
+<ul>
+<li>Verificar </code>partitionSpec<code> (filtrado correcto)</li>
+<li>Revisar keys vacías concentradas en </code>id="NULL"<code></li>
+</ul>
+</ol></p><p><ol>
+<li><strong>Key con MATCH pero sospecha de variaciones:</strong></li>
+</ol>
+   </code>`<code>sql
+   SELECT * FROM result_duplicates WHERE id = '<key>'
+   </code>`<code></p><p><strong>EXACT_MATCH vs MATCH:</strong>
+</code>`<code>scala
+// DiffGenerator.scala líneas 64-71
+// Si TODAS las columnas coinciden → 1 fila EXACT_MATCH
+// En lugar de N filas MATCH (una por columna)
+</code>`<code>
+<ul>
+<li>Reduce volumen: 100 columnas idénticas → <strong>1 fila</strong> en vez de 100</li>
+<li>Facilita identificación de registros perfectos</li>
+</ul></p><p>---</p><p><h3>7.2 Tabla </code>result_duplicates<code></h3></p><p>Mide la <strong>calidad de unicidad</strong> de cada identificador en ambos universos.</p><p><strong>Schema:</strong>
+</code>`<code>
+origin              STRING  -- "ref" | "new"
+id                  STRING  -- Composite key (NULL-safe)
+exact_duplicates    STRING  -- Count of rows with identical hash
+dupes_w_variations  STRING  -- Count of distinct hashes - 1 (max 0)
+occurrences         STRING  -- Total rows for this key
+variations          STRING  -- "col: [v1,v2] | col2: [v3,v4]"
+initiative          STRING  -- Label from initiativeName
+data_date_part      STRING  -- Execution date (ISO)
+</code>`<code></p><p><strong>Cómo se Genera (Implementación Real)</strong></p><p></code>`<code>scala
+// DuplicateDetector.scala</p><p>// 1. Une ambas tablas con columna _src ("ref" | "new")
+unionWithOrigin(refDf, newDf)</p><p>// 2. Aplica priorityCol si configurado (top-1 por _src+keys)
+applyPriorityIf(config, df, keys)</p><p>// 3. Calcula hash SHA256 null-safe por fila
+withRowHash(df)  // Excluye columna _src del hash
+// Hash = sha2(concat_ws("||", col1_or_"__NULL__", col2_or_"__NULL__", ...))</p><p>// 4. Agrupa por (origin + keys)
+groupBy(_src, compositeKeys)
+  .agg(
+    count(*)                                  as occurrences,
+    count(*) - countDistinct(_row_hash)       as exact_duplicates,
+    greatest(0, countDistinct(_row_hash) - 1) as dupes_w_variations,
+    array_sort(collect_set(col))              as col_set  // Por cada col
+  )
+  .filter(occurrences > 1)  // Solo keys duplicadas</p><p>// 5. Formatea variations: "col: [v1,v2] | col2: [v3,v4]"
+// Excluye token "__NULL__" del output
+</code>`<code></p><p><strong>Interpretación por Origen:</strong></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>origin</th>
+<th>Significado</th>
+<th>Acción sugerida</th>
+</tr></thead><tbody>
+<tr>
+<td></code>ref<code></td>
+<td>Duplicados <strong>solo</strong> en tabla histórica</td>
+<td>Revisar procesos upstream REF</td>
+</tr>
+<tr>
+<td></code>new<code></td>
+<td>Duplicados <strong>solo</strong> en tabla candidata</td>
+<td>Revisar procesos upstream NEW</td>
+</tr>
+<tr>
+<td><em>Ambos</em></td>
+<td>Mismo ID duplicado en REF <strong>y</strong> NEW</td>
+<td>Problema sistémico, corregir en ambos flujos</td>
+</tr>
+</tbody></table></p><p><strong>Diagnóstico Rápido:</strong></p><p><ul>
+<li><strong></code>exact_duplicates<code> alto</strong> → Copias exactas (reprocesos, cargas duplicadas)</li>
+<li>Acción: Deduplicar antes de comparar</li>
+</ul></p><p><ul>
+<li><strong></code>dupes_w_variations<code> alto</strong> → Key reescrita con valores diferentes</li>
+<li>Acción: Definir reglas consolidación, usar </code>priorityCol<code></li>
+</ul></p><p><strong>Ejemplo Real (Extracto):</strong></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>origin</th>
+<th>id</th>
+<th>exact_dup</th>
+<th>dupes_w_var</th>
+<th>occ</th>
+<th>variations</th>
+</tr></thead><tbody>
+<tr>
+<td>ref</td>
+<td>5</td>
+<td>0</td>
+<td>1</td>
+<td>2</td>
+<td></code>amount: [300.00,300.50]<code></td>
+</tr>
+<tr>
+<td>ref</td>
+<td>NULL</td>
+<td>0</td>
+<td>1</td>
+<td>2</td>
+<td></code>amount: [60.00,61.00]<code></td>
+</tr>
+<tr>
+<td>new</td>
+<td>NULL</td>
+<td>2</td>
+<td>1</td>
+<td>4</td>
+<td></code>amount: [60.00,61.00]<code></td>
+</tr>
+<tr>
+<td>new</td>
+<td>6</td>
+<td>1</td>
+<td>1</td>
+<td>3</td>
+<td></code>amount: [400.00,400.10]<code></td>
+</tr>
+<tr>
+<td>ref</td>
+<td>4</td>
+<td>0</td>
+<td>1</td>
+<td>2</td>
+<td></code>country: [BR,FR] \</td>
+<td>amount: [200.00,201.00]<code></td>
+</tr>
+<tr>
+<td>new</td>
+<td>4</td>
+<td>2</td>
+<td>1</td>
+<td>4</td>
+<td></code>amount: [200.00,201.00]<code></td>
+</tr>
+</tbody></table></p><p><strong>Interpretación:</strong></p><p><ul>
+<li><strong>exact_dup > 0</strong>: Hay <em>x</em> filas con hash idéntico (copias exactas)</li>
+<li><strong>dupes_w_var > 0</strong>: Existen al menos 2 hashes diferentes para este ID (alguna columna cambia)</li>
+</ul></p><p><strong>Casos Comunes:</strong></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Situación</th>
+<th>exact_dup</th>
+<th>var_dup</th>
+<th>Ejemplo</th>
+</tr></thead><tbody>
+<tr>
+<td>2 filas idénticas</td>
+<td>1</td>
+<td>0</td>
+<td></code>amount<code> todo igual</td>
+</tr>
+<tr>
+<td>2 idénticas + 1 variación</td>
+<td>1</td>
+<td>1</td>
+<td></code>amount<code> 400.00 vs 400.10</td>
+</tr>
+<tr>
+<td>2 filas diferentes</td>
+<td>0</td>
+<td>1</td>
+<td>300.00 vs 300.50</td>
+</tr>
+<tr>
+<td>Fila única (no dup)</td>
+<td>0</td>
+<td>0</td>
+<td>Sin duplicados</td>
+</tr>
+<tr>
+<td>3 idénticas + 1 diferente</td>
+<td>2</td>
+<td>1</td>
+<td>Mix de copias y variación</td>
+</tr>
+</tbody></table></p><p>---</p><p><h3>7.3 Tabla </code>result_summary<code></h3></p><p>Panel de KPIs a nivel de key construido desde las 3 salidas. Responde en segundos: tamaños, intersección, gaps, duplicados y <strong>calidad global</strong>.</p><p><strong>Schema:</strong>
+</code>`<code>
+block           STRING  -- Familia de métrica (KPIS, EXACT MATCH, PARTIAL MATCH, GAP, DUPS)
+metric          STRING  -- Descripción legible de lo que se cuenta
+universe        STRING  -- Scope de cálculo (REF, NEW, BOTH, ROWS)
+numerator       STRING  -- Cantidad principal
+denominator     STRING  -- Referencia para % (si aplica, sino "-")
+pct             STRING  -- Porcentaje formateado con 4 decimales
+samples         STRING  -- IDs de muestra para inspección rápida (ordenados)
+initiative      STRING  -- Label from initiativeName
+data_date_part  STRING  -- Execution date (ISO)
+</code>`<code></p><p><strong>Cómo se Calcula Cada Bloque:</strong></p><p></code>`<code>scala
+// SummaryGenerator.scala líneas 40-120</p><p>// 1. KPIS Block
+val idsRef = refDf.select(buildCid(keys)).distinct()  // Unique IDs REF
+val idsNew = newDf.select(buildCid(keys)).distinct()  // Unique IDs NEW
+val idsBoth = idsRef.intersect(idsNew)                // Intersection</p><p>val totalRowsRef = refDf.count()  // Total rows (con duplicados)
+val totalRowsNew = newDf.count()
+val totalDiff = totalRowsNew - totalRowsRef
+val totalDiffPct = totalDiff / totalRowsRef * 100</p><p>// 2. EXACT MATCH / PARTIAL MATCH (universe = BOTH)
+val diffAgg = diffDf.groupBy("id")
+  .agg(
+    max(when(results === "no_match", 1).otherwise(0)) as has_nm,
+    max(when(results.isin("only_in_ref","only_in_new"), 1)) as has_only
+  )
+  .withColumn("has_diff", greatest(has_nm, has_only))</p><p>val idsVariations = diffAgg.filter(has_diff === 1).intersect(idsBoth)
+val idsExact = idsBoth.except(idsVariations)</p><p>// 3. GAP Block
+val idsOnlyRef = idsRef.except(idsNew)  // 1:0
+val idsOnlyNew = idsNew.except(idsRef)  // 0:1</p><p>// 4. DUPS Block
+val dupRef = refDf.groupBy(cid).count().filter(count > 1)
+val dupNew = newDf.groupBy(cid).count().filter(count > 1)
+val dupBoth = dupRef.intersect(dupNew)
+val dupOnlyRef = dupRef.except(dupNew)
+val dupOnlyNew = dupNew.except(dupRef)</p><p>// 5. Global Quality
+val anyDup = dupRef.union(dupNew).distinct()
+val qualityOk = idsExact.except(anyDup).count()
+val qualityPct = qualityOk / nRefIds * 100
+</code>`<code></p><p><strong>Bloques y Métricas:</strong></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Block</th>
+<th>Metric</th>
+<th>Universe</th>
+<th>Numerator</th>
+<th>Denominator</th>
+<th>Fórmula %</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>KPIS</strong></td>
+<td>Unique IDs</td>
+<td>REF/NEW</td>
+<td>distinct(keys)</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td><strong>KPIS</strong></td>
+<td>Total rows</td>
+<td>ROWS</td>
+<td>count(*)</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td><strong>KPIS</strong></td>
+<td>Total diff(new-ref)</td>
+<td>ROWS</td>
+<td>NEW - REF</td>
+<td>REF</td>
+<td>(NEW-REF)/REF*100</td>
+</tr>
+<tr>
+<td><strong>KPIS</strong></td>
+<td>Global quality</td>
+<td>REF</td>
+<td>exact_match sin dups</td>
+<td>Unique IDs REF</td>
+<td>OK/REF*100</td>
+</tr>
+<tr>
+<td><strong>EXACT MATCH</strong></td>
+<td>1:1 (all columns)</td>
+<td>BOTH</td>
+<td>idsExact</td>
+<td>idsBoth</td>
+<td>exact/both*100</td>
+</tr>
+<tr>
+<td><strong>PARTIAL MATCH</strong></td>
+<td>1:1 (match & no_match cols)</td>
+<td>BOTH</td>
+<td>idsVariations</td>
+<td>idsBoth</td>
+<td>var/both*100</td>
+</tr>
+<tr>
+<td><strong>GAP</strong></td>
+<td>1:0 (only in ref)</td>
+<td>REF</td>
+<td>idsOnlyRef</td>
+<td>nRefIds</td>
+<td>only/ref*100</td>
+</tr>
+<tr>
+<td><strong>GAP</strong></td>
+<td>0:1 (only in new)</td>
+<td>NEW</td>
+<td>idsOnlyNew</td>
+<td>nNewIds</td>
+<td>only/new*100</td>
+</tr>
+<tr>
+<td><strong>DUPS</strong></td>
+<td>duplicates (both)</td>
+<td>BOTH</td>
+<td>dupBoth</td>
+<td>idsBoth</td>
+<td>dup/both*100</td>
+</tr>
+<tr>
+<td><strong>DUPS</strong></td>
+<td>duplicates (only in ref)</td>
+<td>REF</td>
+<td>dupOnlyRef</td>
+<td>nRefIds</td>
+<td>dup/ref*100</td>
+</tr>
+<tr>
+<td><strong>DUPS</strong></td>
+<td>duplicates (only in new)</td>
+<td>NEW</td>
+<td>dupOnlyNew</td>
+<td>nNewIds</td>
+<td>dup/new*100</td>
+</tr>
+</tbody></table></p><p><strong>Notas sobre Denominadores:</strong></p><p><ul>
+<li></code>universe=REF/NEW<code> → denominador </code>-<code> (excepto Total diff y Global quality)</li>
+<li></code>universe=BOTH<code> → denominador = <strong>keys en intersección</strong></li>
+<li></code>universe=ROWS<code> → conteo de filas físicas</li>
+<li>Porcentaje formato: </code>"XX.XXXX%"<code> (4 decimales), </code>"-"<code> si denominador=0</li>
+</ul></p><p><strong>Tips de Lectura:</strong></p><p><ol>
+<li><strong>% alto PARTIAL MATCH en BOTH</strong> → revisar normalizaciones (espacios, mayúsculas), reglas de agregación</li>
+<li><strong>Key con variations en duplicates</strong> → ese ID <strong>NO suma</strong> al numerador de Global quality</li>
+<li><strong>Drill-down rápido:</strong></li>
+</ol>
+   </code>`<code>sql
+   SELECT * FROM result_differences 
+   WHERE results NOT IN ('MATCH', 'EXACT_MATCH')
+   ORDER BY id, column
+   </code>`<code></p><p>---</p><p><h2>8. Optimizaciones y Performance</h2></p><p><h3>8.1 Gestión de Serialización (Crítico en PRE)</h3></p><p><strong>Problema:</strong> Tablas creadas con Hive SerDe causan </code>Task not serializable<code> en entornos distribuidos.</p><p><strong>Solución implementada:</strong>
+</code>`<code>scala
+// TableComparisonController.scala
+// 1. Forzar DataSource readers
+spark.conf.set("spark.sql.hive.convertMetastoreParquet", "true")
+spark.conf.set("spark.sql.hive.convertMetastoreOrc", "true")</p><p>// 2. Limpiar caché metastore
+spark.catalog.clearCache()</p><p>// 3. Validar plan físico
+assertFileSource(df, label)
+// Falla si detecta HiveTableScanExec
+</code>`<code></p><p><strong>Si ves este error:</strong>
+</code>`<code>
+Exception: Task not serializable
+Physical plan contains: HiveTableScanExec
+</code>`<code></p><p><strong>Solución:</strong>
+</code>`<code>sql
+-- Recrear tabla como DataSource Parquet
+DROP TABLE IF EXISTS default.result_differences;
+CREATE TABLE default.result_differences (
+  id STRING, column STRING,
+  value_ref STRING, value_new STRING,
+  results STRING, initiative STRING, data_date_part STRING
+)
+USING parquet
+PARTITIONED BY (initiative, data_date_part)
+LOCATION 's3a://bucket/path/differences';
+</code>`<code></p><p>---</p><p><h3>8.2 Reparticionamiento Inteligente</h3></p><p></code>`<code>scala
+// PrepUtils.scala
+def pickTargetPartitions(spark: SparkSession): Int = {
+  val base = spark.sparkContext.defaultParallelism
+  base * 2  // 2x parallelism para mejor utilización
+}</p><p>// Reparticiona por composite keys antes de comparar
+df.repartition(nParts, compositeKeyCols.map(col): _*)
+</code>`<code></p><p><strong>Caché estratégico:</strong>
+</code>`<code>scala
+refDf.persist(StorageLevel.MEMORY_AND_DISK)
+newDf.persist(StorageLevel.MEMORY_AND_DISK)</p><p>// Liberación explícita
+df.unpersist(blocking = true)
+</code>`<code></p><p><strong>Coalesce en salidas:</strong>
+</code>`<code>scala
+out.coalesce(1)  // 1 archivo por partición
+   .write.mode(SaveMode.Overwrite)
+   .insertInto(tableName)
+</code>`<code></p><p>---</p><p><h3>8.3 Políticas de Null Handling</h3></p><p><strong>Keys vacías → NULL:</strong>
+</code>`<code>scala
+// DiffGenerator.scala
+when(trim(col(key).cast(StringType)) === "", lit(null))
+  .otherwise(col(key))
+</code>`<code></p><p><strong>Null-safe equality en joins:</strong>
+</code>`<code>scala
+// config.nullKeyMatches = true (default)
+left_key <=> right_key  // NULL == NULL
+</code>`<code></p><p><strong>Display de nulls:</strong>
+</code>`<code>scala
+when(col.isNull || trim(col) === "", lit("-"))
+  .otherwise(col.cast(StringType))
+</code>`<code></p><p><strong>Hash null-safe:</strong>
+</code>`<code>scala
+// DuplicateDetector.scala
+coalesce(col(c).cast(StringType), lit("__NULL__"))
+</code>`<code></p><p>---</p><p><h3>8.4 Exclusión Automática de Columnas Constantes</h3></p><p></code>`<code>scala
+// DiffGenerator.scala
+// Calcula countDistinct en AMBOS lados
+constantStats(refDf, candidateCols)
+constantStats(newDf, candidateCols)</p><p>// Excluye si:
+// - countDistinct(col) <= 1 en REF
+// - countDistinct(col) <= 1 en NEW
+// - Valor representativo idéntico
+</code>`<code></p><p><strong>Log ejemplo:</strong>
+</code>`<code>
+[INFO] Excluding constant columns with SAME value on both sides: audit_version,load_date
+</code>`<code></p><p><strong>Rationale:</strong> Evita ruido en tablas anchas (100+ columnas con valores fijos).</p><p>---</p><p><h2>9. Limitaciones y Buenas Prácticas</h2></p><p><h3>9.1 Limitaciones Conocidas</h3></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Limitación</th>
+<th>Workaround</th>
+</tr></thead><tbody>
+<tr>
+<td></code>aggOverrides<code> no configurable vía KV</td>
+<td>Configurar en código Scala</td>
+</tr>
+<tr>
+<td></code>priorityCol<code> no via KV</td>
+<td>Configurar en código Scala</td>
+</tr>
+<tr>
+<td></code>exportExcelPath<code> no vía KV</td>
+<td>Configurar en código Scala</td>
+</tr>
+<tr>
+<td>Max 256 fechas en resolución wildcards</td>
+<td>Dividir en múltiples ejecuciones</td>
+</tr>
+<tr>
+<td>Schema mismatch no bloquea ejecución</td>
+<td>Revisar logs antes de interpretar</td>
+</tr>
+<tr>
+<td>Columnas partition en comparación</td>
+<td>Agregar a </code>ignoreCols<code></td>
+</tr>
+</tbody></table></p><p>---</p><p><h3>9.2 Buenas Prácticas</h3></p><p><strong>1. Validar particiones antes de ejecutar:</strong>
+</code>`<code>sql
+SHOW PARTITIONS default.ref_table;
+-- Confirmar que existen las particiones esperadas
+</code>`<code></p><p><strong>2. Usar </code>checkDuplicates=true<code> en primera ejecución:</strong>
+<ul>
+<li>Identifica problemas de calidad upstream</li>
+<li>Puedes desactivar después si no es necesario</li>
+</ul></p><p><strong>3. Monitorear Global quality en CI:</strong>
+</code>`<code>sql
+SELECT numerator, denominator, pct
+FROM result_summary
+WHERE metric = 'Global quality'
+AND pct < '95.0000%';  -- Alerta si < 95%
+</code>`<code></p><p><strong>4. Filtrar coincidencias para análisis:</strong>
+</code>`<code>sql
+SELECT * FROM result_differences
+WHERE results NOT IN ('MATCH', 'EXACT_MATCH')
+</code>`<code></p><p><strong>5. Recrear tablas destino como DataSource:</strong>
+</code>`<code>sql
+DROP TABLE IF EXISTS default.result_differences;
+CREATE TABLE ... USING parquet ...
+</code>`<code></p><p><strong>6. Combinar filtros estratégicamente:</strong>
+</code>`<code>bash
+<h1>Filtro grueso: particiones</h1>
+partitionSpec="data_date_part=2025-10-01/"</p><p><h1>Filtro fino: SQL</h1>
+refFilter="time LIKE '06:%' AND amount >= 1000"
+</code>`<code></p><p><strong>7. Usar ventanas temporales para comparaciones históricas:</strong>
+</code>`<code>bash
+refWindowDays=-7..0   # 7 días históricos
+newWindowDays=0..+1   # Hoy + mañana
+</code>`<code></p><p>---</p><p><h3>9.3 Ejemplo Completo de Producción</h3></p><p></code>`<code>bash
+#!/bin/bash
+<h1>compare_tables.sh</h1></p><p>SPARK_HOME=/opt/spark
+JAR=s3a://artifacts/cib-adhc-internaltools-1.0.5-SNAPSHOT.jar</p><p>$SPARK_HOME/bin/spark-submit \
+  --master yarn --deploy-mode cluster \
+  --conf spark.sql.adaptive.enabled=true \
+  --conf spark.sql.adaptive.coalescePartitions.enabled=true \
+  --conf spark.dynamicAllocation.enabled=true \
+  --conf spark.sql.hive.convertMetastoreParquet=true \
+  --driver-memory 4g \
+  --executor-memory 8g \
+  --executor-cores 4 \
+  --num-executors 10 \
+  --class com.santander.cib.adhc.internal_aml_tools.Main \
+  $JAR \
+  refTable=default.aml_transactions_ref \
+  newTable=default.aml_transactions_new \
+  compositeKeyCols=transaction_id,customer_id \
+  partitionSpec="geo=ES|PT/data_date_part=2025-11-19/" \
+  ignoreCols=ingestion_ts,audit_user,version \
+  initiativeName=AML_Q4_Migration \
+  tablePrefix=default.aml_cmp_ \
+  outputBucket=s3a://scib-pre-bu-aml/comparisons \
+  executionDate=2025-11-19 \
+  checkDuplicates=true \
+  includeEqualsInDiff=false
+</code>`<code></p><p><strong>Verificación post-ejecución:</strong>
+</code>`<code>sql
+-- 1. Ver resumen
+SELECT block, metric, numerator, denominator, pct
+FROM default.aml_cmp_summary
+WHERE initiative = 'AML_Q4_Migration'
+ORDER BY block, metric;</p><p>-- 2. Columnas problemáticas
+SELECT column, COUNT(*) as cnt
+FROM default.aml_cmp_differences
+WHERE results = 'NO_MATCH'
+GROUP BY column
+ORDER BY cnt DESC
+LIMIT 20;</p><p>-- 3. Duplicados críticos
+SELECT * FROM default.aml_cmp_duplicates
+WHERE dupes_w_variations > 0
+ORDER BY CAST(occurrences AS INT) DESC
+LIMIT 50;
+</code>`<code></p><p>---</p><p><h3>9.4 Referencias del Código Fuente</h3></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>Componente</th>
+<th>Archivo</th>
+<th>Responsabilidad</th>
+</tr></thead><tbody>
+<tr>
+<td>Entry point</td>
+<td></code>Main.scala<code></td>
+<td>Routing y SparkSession</td>
+</tr>
+<tr>
+<td>Parser args</td>
+<td></code>TableComparatorApp.scala<code></td>
+<td>Construcción config</td>
+</tr>
+<tr>
+<td>Orquestador</td>
+<td></code>TableComparisonController.scala<code></td>
+<td>Flujo principal</td>
+</tr>
+<tr>
+<td>Particiones</td>
+<td></code>PartitionPruning.scala<code></td>
+<td>Wildcards y filtrado</td>
+</tr>
+<tr>
+<td>Schemas</td>
+<td></code>SchemaChecker.scala<code></td>
+<td>Validación</td>
+</tr>
+<tr>
+<td>Comparación</td>
+<td></code>DiffGenerator.scala<code></td>
+<td>Lógica columna por columna</td>
+</tr>
+<tr>
+<td>Duplicados</td>
+<td></code>DuplicateDetector.scala<code></td>
+<td>Análisis y hash</td>
+</tr>
+<tr>
+<td>Métricas</td>
+<td></code>SummaryGenerator.scala<code></td>
+<td>KPIs agregados</td>
+</tr>
+</tbody></table></p><p><strong>Stack tecnológico:</strong>
+<ul>
+<li>Scala: 2.12.17</li>
+<li>Spark: 3.5.0</li>
+<li>Maven: Build management</li>
+<li>Log4j: 2.17.1</li>
+</ul></p><p>---</p><p><h3>9.5 Preguntas Frecuentes (FAQ)</h3></p><p><strong>P: ¿Puedo comparar tablas con esquemas diferentes?</strong>  
+R: ✅ Sí. El motor compara automáticamente solo las columnas comunes. Las columnas únicas aparecen como </code>ONLY_IN_REF<code> o </code>ONLY_IN_NEW<code> en la tabla differences.</p><p><strong>P: ¿Cómo manejo duplicados en las claves?</strong>  
+R: Activa </code>checkDuplicates=true<code> para detectarlos. Usa </code>priorityCol<code> para desempate automático:
+</code>`<code>bash
+priorityCol=update_timestamp  # Mantiene fila con timestamp más alto
+priorityCol=version_number    # Mantiene versión más reciente
+</code>`<code>
+Ver sección 3.2.5 para detalles completos.</p><p><strong>P: ¿Qué significa "Global Quality < 95%"?</strong>  
+R: Menos del 95% de las claves tienen coincidencia exacta sin duplicados. Investiga con:
+</code>`<code>sql
+SELECT * FROM differences WHERE results = 'NO_MATCH'
+SELECT * FROM duplicates WHERE dupes_w_variations > 0
+</code>`<code></p><p><strong>P: ¿Por qué veo </code>id="NULL"<code> en los resultados?</strong>  
+R: Claves vacías se normalizan a NULL y se agrupan. Solución: rellenar keys en la ingesta o añadir filtro:
+</code>`<code>bash
+refFilter="key_column IS NOT NULL"
+</code>`<code></p><p><strong>P: ¿Cómo filtro solo transacciones de una hora específica?</strong>  
+R: Usa filtros SQL personalizados:
+</code>`<code>bash
+refFilter="time LIKE '06:%'"  # Solo hora 06:00-06:59
+</code>`<code></p><p><strong>P: ¿El motor bloquea la ejecución si los esquemas no coinciden?</strong>  
+R: ❌ No. Solo genera logs de advertencia y compara columnas comunes. Revisa </code>[SCHEMA]<code> logs antes de interpretar resultados.</p><p><strong>P: ¿Cómo optimizo comparaciones de tablas muy grandes (TB)?</strong>  
+R:
+<ul>
+<li>Usa </code>partitionSpec<code> para filtrar particiones (más rápido que SQL)</li>
+<li>Activa </code>spark.sql.adaptive.enabled=true<code></li>
+<li>Aumenta </code>executor-memory<code> y </code>num-executors<code></li>
+<li>Considera dividir en múltiples ejecuciones por rango de fechas</li>
+</ul></p><p><strong>P: ¿Por qué columnas constantes no aparecen en differences?</strong>  
+R: Se excluyen automáticamente si tienen el mismo valor en REF y NEW. Log:
+</code>`<code>
+[INFO] Excluding constant columns with SAME value on both sides: audit_version
+</code>`<code></p><p><strong>P: ¿Puedo exportar el summary a Excel?</strong>  
+R: Sí, pero requiere configuración en código Scala (no disponible vía KV args):
+</code>`<code>scala
+val config = CompareConfig(..., exportExcelPath = Some("s3a://bucket/summary.xlsx"))
+</code>`<code></p><p><strong>P: Error "Task not serializable" ¿qué hago?</strong>  
+R: La tabla usa HiveTableScan. Recréala como DataSource Parquet:
+</code>`<code>sql
+DROP TABLE IF EXISTS your_table;
+CREATE TABLE your_table (...) USING parquet LOCATION 's3a://...';
+</code>`<code></p><p>---</p><p><h3>9.6 Tarjeta de Referencia Rápida</h3></p><p><table border="1" cellpadding="5" cellspacing="0">
+<thead><tr>
+<th>¿Quiero...?</th>
+<th>Parámetro o Query</th>
+</tr></thead><tbody>
+<tr>
+<td><strong>Filtrar por fecha específica</strong></td>
+<td></code>partitionSpec="data_date_part=2025-11-19/"<code></td>
+</tr>
+<tr>
+<td><strong>Filtrar por múltiples geos</strong></td>
+<td></code>partitionSpec="geo=[ES,PT,FR]/..."<code></td>
+</tr>
+<tr>
+<td><strong>Todos los geos disponibles</strong></td>
+<td></code>partitionSpec="geo=*/..."<code> (resuelve automático)</td>
+</tr>
+<tr>
+<td><strong>Filtrar por SQL (valores)</strong></td>
+<td></code>refFilter="amount >= 1000 AND status='ACTIVE'"<code></td>
+</tr>
+<tr>
+<td><strong>Comparar ventanas temporales</strong></td>
+<td></code>refWindowDays=-7..0<code> </code>newWindowDays=0..+1<code></td>
+</tr>
+<tr>
+<td><strong>Ver solo diferencias</strong></td>
+<td></code>SELECT * FROM differences WHERE results='NO_MATCH'<code></td>
+</tr>
+<tr>
+<td><strong>Ver calidad global</strong></td>
+<td></code>SELECT * FROM summary WHERE metric='Global quality'<code></td>
+</tr>
+<tr>
+<td><strong>Top columnas problemáticas</strong></td>
+<td></code>SELECT column, COUNT(*) FROM differences WHERE results='NO_MATCH' GROUP BY column<code></td>
+</tr>
+<tr>
+<td><strong>Duplicados críticos</strong></td>
+<td></code>SELECT * FROM duplicates WHERE dupes_w_variations > 0<code></td>
+</tr>
+<tr>
+<td><strong>Duplicados por categoría</strong></td>
+<td></code>SELECT * FROM duplicates WHERE category='both'<code></td>
+</tr>
+<tr>
+<td><strong>Excluir columnas</strong></td>
+<td></code>ignoreCols=ingestion_ts,audit_user,version<code></td>
+</tr>
+<tr>
+<td><strong>Detectar duplicados</strong></td>
+<td></code>checkDuplicates=true<code></td>
+</tr>
+<tr>
+<td><strong>Resolver duplicados automático</strong></td>
+<td></code>priorityCol=update_timestamp<code> (mantiene más reciente)</td>
+</tr>
+<tr>
+<td><strong>No incluir coincidencias</strong></td>
+<td></code>includeEqualsInDiff=false<code> (default)</td>
+</tr>
+</tbody></table></p><p><strong>Comandos útiles:</strong>
+</code>`<code>bash
+<h1>Ver particiones disponibles antes de ejecutar</h1>
+SHOW PARTITIONS default.your_table;</p><p><h1>Verificar schema de tablas</h1>
+DESCRIBE default.your_table;</p><p><h1>Contar resultados por tipo</h1>
+SELECT results, COUNT(*) FROM differences GROUP BY results;</p><p><h1>Verificar calidad por iniciativa</h1>
+SELECT initiative, metric, pct FROM summary WHERE metric='Global quality';
+</code>``</p><p>---</p><p><strong>📚 Última actualización:</strong> 2025-11-21  
+<strong>📦 Versión documento:</strong> 3.2 (con análisis detallado de duplicados y priorityCol)
+</p>
+</body>
+</html>
