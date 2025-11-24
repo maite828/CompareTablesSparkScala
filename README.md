@@ -1,6 +1,8 @@
-# Internal Tools - Table Comparison Engine
+# AML Internal Tools - Table Comparison Engine
 
-**Version:** 1.0.5-SNAPSHOT | **Stack:** Scala 2.12.17 + Spark 3.5.0
+**Version:** 1.0.5-SNAPSHOT | **Stack:** Scala 2.12.17 + Spark 3.5.0  
+**Deployment:** Object Storage | [Documentation](https://github.alm.europe.cloudcenter.corp/pages/cib-oasis-academy/oasis-academy/pipelines/object-storage/spark-java/)
+
 ---
 
 # 🚀 Guía de Uso - Motor de Comparación de Tablas Spark
@@ -48,11 +50,9 @@ Compara dos tablas del mismo día con claves compuestas:
 ```bash
 spark-submit \
   --class com.santander.cib.adhc.internal_aml_tools.Main \
-  --master yarn --deploy-mode cluster \
-  --driver-memory 4g --executor-memory 8g \
   cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
-  refTable=default.payments_ref \
-  newTable=default.payments_new \
+  refTable=default.table_ref \
+  newTable=default.table_new \
   compositeKeyCols=transaction_id,customer_id \
   partitionSpec="geo=ES/data_date_part=2025-11-19/" \
   ignoreCols=ingestion_ts,audit_user \
@@ -64,7 +64,7 @@ spark-submit \
 ```
 
 **¿Qué hace esto?**
-- Compara `payments_ref` vs `payments_new` usando `transaction_id` + `customer_id` como clave
+- Compara `payments_ref` vs `table_new` usando `table_id` + `customer_id` como clave
 - Filtra por España y fecha 2025-11-19
 - Ignora columnas técnicas (`ingestion_ts`, `audit_user`)
 - Genera 3 tablas: `comparison_differences`, `comparison_duplicates`, `comparison_summary`
@@ -87,8 +87,8 @@ FROM default.comparison_differences
 WHERE results = 'NO_MATCH'
 LIMIT 100;
 
--- 3. Ver duplicados problemáticos
-SELECT origin, id, occurrences, dupes_w_variations, variations
+-- 3. Ver duplicados problemáticos (puede haber 2 filas por ID si category='both')
+SELECT origin, id, category, occurrences, dupes_w_variations, variations
 FROM default.comparison_duplicates
 WHERE dupes_w_variations > 0
 ORDER BY CAST(occurrences AS INT) DESC;
@@ -245,7 +245,6 @@ refFilter="UPPER(status) = 'ACTIVE'"
   partitionSpec="data_date_part=2025-10-01/"  # Filtro grueso por día
   refFilter="time LIKE '06:%'"                 # Filtro fino por hora
   ```
-
 ---
 
 #### 2.4.4 Column Mapping - Comparar Tablas con Nombres de Columnas Diferentes (Nuevo ✨)
@@ -565,6 +564,30 @@ La columna `category` categoriza cada ID duplicado según su presencia en REF/NE
 | `both` | ID duplicado en **ambas** tablas | ID aparece 2+ veces en REF **Y** 2+ veces en NEW |
 | `only_ref` | ID duplicado **solo en REF** | ID aparece 2+ veces en REF pero 0 o 1 vez en NEW |
 | `only_new` | ID duplicado **solo en NEW** | ID aparece 2+ veces en NEW pero 0 o 1 vez en REF |
+
+**⚠️ Importante: ¿Por qué 2 filas para `category="both"`?**
+
+Cuando un ID está duplicado en **ambas tablas**, la tabla `duplicates` contiene **2 filas** (una por lado) porque **las métricas pueden ser diferentes**:
+
+```
+Ejemplo: id="123" duplicado en REF (5 ocurrencias) y NEW (3 ocurrencias)
+
+┌────────┬─────┬──────────┬──────────────┬─────────────┬────────────┐
+│ origin │ id  │ category │ exact_dup    │ occurrences │ variations │
+├────────┼─────┼──────────┼──────────────┼─────────────┤────────────┤
+│ ref    │ 123 │ both     │ 3            │ 5           │ amount:... │  ← Métricas de REF
+│ new    │ 123 │ both     │ 1            │ 3           │ status:... │  ← Métricas de NEW
+└────────┴─────┴──────────┴──────────────┴─────────────┴────────────┘
+
+→ origin: Indica de qué tabla vienen las métricas
+→ category: Indica que el ID está duplicado en ambas tablas
+→ Permite comparar: REF tiene más duplicados (5) que NEW (3)
+```
+
+**Razón del diseño:**
+- ✅ **Granularidad por lado:** Cada tabla puede tener diferente número de duplicados
+- ✅ **Métricas específicas:** `exact_duplicates`, `occurrences`, `variations` son por lado
+- ✅ **Info completa:** Permite diagnosticar si un lado tiene más problema que otro
 
 **Coherencia con `summary.DUPS`:**
 ```sql
@@ -1357,8 +1380,8 @@ id="NULL" (varias filas con key vacía en ambos lados)
    ```
 
 2. **Investigar ONLY_IN_* masivos:**
-    - Verificar `partitionSpec` (filtrado correcto)
-    - Revisar keys vacías concentradas en `id="NULL"`
+   - Verificar `partitionSpec` (filtrado correcto)
+   - Revisar keys vacías concentradas en `id="NULL"`
 
 3. **Key con MATCH pero sospecha de variaciones:**
    ```sql
@@ -1432,10 +1455,10 @@ groupBy(_src, compositeKeys)
 **Diagnóstico Rápido:**
 
 - **`exact_duplicates` alto** → Copias exactas (reprocesos, cargas duplicadas)
-    - Acción: Deduplicar antes de comparar
-
+  - Acción: Deduplicar antes de comparar
+  
 - **`dupes_w_variations` alto** → Key reescrita con valores diferentes
-    - Acción: Definir reglas consolidación, usar `priorityCol`
+  - Acción: Definir reglas consolidación, usar `priorityCol`
 
 **Ejemplo Real (Extracto):**
 
@@ -1844,6 +1867,15 @@ priorityCol=version_number    # Mantiene versión más reciente
 ```
 Ver sección 3.2.5 para detalles completos.
 
+**P: ¿Por qué veo 2 filas con el mismo ID en tabla duplicates?**  
+R: Si `category='both'`, el ID está duplicado en **ambas tablas** (REF y NEW). Se generan 2 filas porque las métricas (occurrences, exact_duplicates, variations) pueden ser **diferentes** en cada lado. Cada fila muestra las métricas específicas de su tabla de origen.
+```sql
+-- Ejemplo: id=123 con diferente número de duplicados en cada lado
+SELECT origin, id, category, occurrences FROM duplicates WHERE id='123';
+-- → origin='ref', category='both', occurrences='5'
+-- → origin='new', category='both', occurrences='3'
+```
+
 **P: ¿Qué significa "Global Quality < 95%"?**  
 R: Menos del 95% de las claves tienen coincidencia exacta sin duplicados. Investiga con:
 ```sql
@@ -1867,7 +1899,7 @@ refFilter="time LIKE '06:%'"  # Solo hora 06:00-06:59
 R: ❌ No. Solo genera logs de advertencia y compara columnas comunes. Revisa `[SCHEMA]` logs antes de interpretar resultados.
 
 **P: ¿Cómo optimizo comparaciones de tablas muy grandes (TB)?**  
-R:
+R: 
 - Usa `partitionSpec` para filtrar particiones (más rápido que SQL)
 - Activa `spark.sql.adaptive.enabled=true`
 - Aumenta `executor-memory` y `num-executors`
