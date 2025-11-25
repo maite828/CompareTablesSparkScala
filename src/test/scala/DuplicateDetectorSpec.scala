@@ -38,7 +38,7 @@ class DuplicateDetectorSpec extends AnyFlatSpec with Matchers with SparkSessionT
       includeEqualsInDiff = true,
       autoCreateTables    = false,
       exportExcelPath     = None,
-      priorityCol         = None,
+      priorityCols        = Seq.empty,
       aggOverrides        = Map.empty,
       // nullKeyMatches deja el valor por defecto (true)
       outputDateISO       = "2025-01-01"

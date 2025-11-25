@@ -140,11 +140,20 @@ object DiffGenerator extends Logging {
 
   /** Apply optional priority policy: take first row by priority within each key partition. */
   private def preOrderByPriority(df: DataFrame, keys: Seq[String], config: CompareConfig): DataFrame = {
-    config.priorityCol match {
-      case Some(prio) if df.columns.contains(prio) =>
-        val w = Window.partitionBy(keys.map(col): _*).orderBy(col(prio).desc_nulls_last)
+    if (config.priorityCols.nonEmpty) {
+      val existingPriorityCols = config.priorityCols.filter(df.columns.contains)
+      
+      if (existingPriorityCols.nonEmpty) {
+        // Order by priorityCols in order (first has highest precedence)
+        val orderCols = existingPriorityCols.map(col(_).desc_nulls_last)
+        
+        val w = Window.partitionBy(keys.map(col): _*).orderBy(orderCols: _*)
         df.withColumn("_rn", row_number().over(w)).filter(col("_rn") === 1).drop("_rn")
-      case _ => df
+      } else {
+        df
+      }
+    } else {
+      df
     }
   }
 

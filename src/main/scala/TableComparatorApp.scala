@@ -142,9 +142,27 @@ class TableComparatorApp()(implicit spark: SparkSession) extends Logging {
     val newFilter = kv.get("newFilter").filter(_.nonEmpty)
     info(s"[DEBUG] refFilter: ${refFilter.getOrElse("<none>")}, newFilter: ${newFilter.getOrElse("<none>")}")
 
-    // Optional priority column for duplicate detection (keeps highest value per group)
-    val priorityCol = kv.get("priorityCol").filter(_.nonEmpty)
-    info(s"[DEBUG] priorityCol: ${priorityCol.getOrElse("<none>")}")
+    // Optional priority columns for duplicate detection (keeps highest value per group)
+    // Supports both formats:
+    //   - priorityCols=col1,col2,col3 (multiple columns with precedence order)
+    //   - priorityCol=col1 (single column, backward compatibility)
+    val priorityColsFromMulti = kv.get("priorityCols")
+      .map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq)
+      .getOrElse(Seq.empty)
+    
+    val priorityColFromSingle = kv.get("priorityCol")
+      .filter(_.nonEmpty)
+      .map(Seq(_))
+      .getOrElse(Seq.empty)
+    
+    // Precedence: priorityCols > priorityCol
+    val priorityCols = if (priorityColsFromMulti.nonEmpty) {
+      priorityColsFromMulti
+    } else {
+      priorityColFromSingle
+    }
+    
+    info(s"[DEBUG] priorityCols: ${if (priorityCols.isEmpty) "<none>" else priorityCols.mkString(",")}")
 
     CompareConfig(
       spark = spark,
@@ -158,7 +176,7 @@ class TableComparatorApp()(implicit spark: SparkSession) extends Logging {
       outputBucket = outputBucket,
       checkDuplicates = checkDuplicates,
       includeEqualsInDiff = includeEquals,
-      priorityCol = priorityCol,
+      priorityCols = priorityCols,
       aggOverrides = Map.empty,
       outputDateISO = outputDateISO,
       // nuevos campos:

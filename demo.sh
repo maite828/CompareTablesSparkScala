@@ -34,13 +34,13 @@ echo "----------------------------------------------------------------"
   newPartitionSpec=geo=*/fecha_proceso=[2023-11-22,2023-11-23] \
   compositeKeyCols=id \
   checkDuplicates=true \
+  includeEqualsInDiff=true \
   colMap.id=id_v2 \
   colMap.name=nombre_cliente \
   colMap.balance=saldo \
   colMap.data_date_part=fecha_proceso \
   colMap.geo=pais \
-  colMap.priority=prioridad \
-  priorityCol=priority \
+  priorityCols=balance,name,priority \
   #refFilter="id = 1" \
   #newFilter="id_v2 = 1"
 

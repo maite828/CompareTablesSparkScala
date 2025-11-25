@@ -35,7 +35,7 @@ class DiffGeneratorSpec extends AnyFlatSpec with Matchers with SparkSessionTestW
       includeEqualsInDiff = true,
       autoCreateTables    = false,
       // opcionales/nuevos
-      priorityCol         = None,
+      priorityCols        = Seq.empty,
       aggOverrides        = Map.empty,
       exportExcelPath     = None,
       // requerido por CompareConfig

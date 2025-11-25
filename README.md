@@ -635,57 +635,78 @@ WHERE dupes_w_variations > 0
 GROUP BY origin;
 ```
 
-#### 3.2.5 Parámetro `priorityCol` - Resolución Inteligente de Duplicados
+#### 3.2.5 Parámetro `priorityCols` - Resolución Inteligente de Duplicados
 
 **¿Qué hace?** Filtra duplicados **antes** del análisis, manteniendo solo la fila con **mayor prioridad** dentro de cada grupo (clave + origen).
 
+**Formatos soportados:**
+- **Múltiples columnas** (nuevo): `priorityCols=col1,col2,col3` - Orden de precedencia
+- **Una columna** (backward compatible): `priorityCol=col1`
+
 **¿Cuándo usarlo?**
 
-| Escenario | ¿Usar priorityCol? | Columna recomendada |
-|-----------|-------------------|---------------------|
+| Escenario | ¿Usar priorityCols? | Columnas recomendadas |
+|-----------|---------------------|----------------------|
 | Tabla snapshot (1 fila por ID, datos estáticos) | ❌ No necesario | - |
-| Tabla histórica con versiones (CDC, SCD Type 2) | ✅ **Sí** | `version`, `update_timestamp`, `effective_date` |
-| Tabla con retries/reprocessing (mismo ID, múltiples intentos) | ✅ **Sí** | `processing_timestamp`, `retry_count` |
+| Tabla histórica con versiones (CDC, SCD Type 2) | ✅ **Sí** | `version,update_timestamp` |
+| Tabla con retries/reprocessing (mismo ID, múltiples intentos) | ✅ **Sí** | `processing_timestamp,retry_count` |
 | Tabla transaccional (cada fila es única por diseño) | ❌ No necesario | - |
-| Tabla con múltiples updates del mismo registro | ✅ **Sí** | `last_modified_date`, `sequence_number` |
+| Tabla con múltiples updates del mismo registro | ✅ **Sí** | `last_modified_date,sequence_number` |
 
 **Cómo funciona:**
 
 ```scala
-// Pseudocódigo interno
-Window.partitionBy(origin, key1, key2, ...)  // Agrupa por origen + clave
-      .orderBy(priorityCol DESC NULLS LAST)  // Ordena: valores altos primero, NULL al final
+// Para Duplicados: Particiona por TODAS las columnas excepto priorityCols
+Window.partitionBy(all_columns_except_priorityCols)
+      .orderBy(col1 DESC, col2 DESC, ...)  // Orden de precedencia
+
+// Para Diferencias: Particiona por compositeKeyCols
+Window.partitionBy(compositeKeyCols)
+      .orderBy(col1 DESC, col2 DESC, ...)
       
-→ Selecciona row_number() = 1  (fila con valor MÁS ALTO)
+→ Selecciona row_number() = 1  (fila con valor MÁS ALTO en col1, luego col2, etc.)
+```
+
+**Orden de precedencia con múltiples columnas:**
+
+```bash
+priorityCols=timestamp,version,retry_count
+
+# Orden de evaluación:
+1. Ordena por timestamp DESC (mayor prioridad)
+2. Si empate, ordena por version DESC
+3. Si empate, ordena por retry_count DESC
 ```
 
 **Criterios de ordenación:**
 - ✅ **Valores altos tienen prioridad**: `1000 > 100 > 10`
 - ✅ **Timestamps más recientes primero**: `2025-11-21 > 2025-11-20`
+- ✅ **Strings alfabéticamente**: `Bob_v2 > Bob_v1 > Bob`
 - ✅ **NULLs al final (menor prioridad)**: Se descartan si existen valores no-NULL
 
 **Ejemplo - Tabla con múltiples updates:**
 
 ```sql
--- ANTES de priorityCol (datos crudos)
+-- ANTES de priorityCols (datos crudos)
 REF table:
-┌───────┬─────────────────────┬────────┬────────┐
-│ id    │ update_timestamp    │ status │ amount │
-├───────┼─────────────────────┼────────┼────────┤
-│ 123   │ 2025-11-21 10:00:00 │ A      │ 100    │  ← Update v1
-│ 123   │ 2025-11-21 10:05:00 │ A      │ 100    │  ← Update v2 (sin cambios)
-│ 123   │ 2025-11-21 10:10:00 │ I      │ 200    │  ← Update v3 (cambió) ✓ MÁS RECIENTE
-└───────┴─────────────────────┴────────┴────────┘
+┌───────┬─────────────────────┬─────────┬────────┬────────┐
+│ id    │ update_timestamp    │ version │ status │ amount │
+├───────┼─────────────────────┼─────────┼────────┼────────┤
+│ 123   │ 2025-11-21 10:00:00 │ 1       │ A      │ 100    │  ← Update v1
+│ 123   │ 2025-11-21 10:05:00 │ 2       │ A      │ 100    │  ← Update v2
+│ 123   │ 2025-11-21 10:10:00 │ 3       │ I      │ 200    │  ← Update v3 ✓ GANA
+└───────┴─────────────────────┴─────────┴────────┴────────┘
 
-SIN priorityCol:
+SIN priorityCols:
 → Detecta duplicado: 3 filas con id=123
 → exact_duplicates="1" (2 filas iguales)
 → dupes_w_variations="2" (3 hashes distintos)
 → occurrences="3"
-→ variations="status: [A,I] | amount: [100,200]"
+→ variations="status: [A,I] | amount: [100,200] | version: [1,2,3]"
 
-CON priorityCol="update_timestamp":
-→ Filtro previo: solo mantiene fila con 10:10:00 (timestamp más alto)
+CON priorityCols="update_timestamp,version":
+→ Filtro previo: solo mantiene fila con timestamp más alto (10:10:00)
+→ Si empate en timestamp, usa version más alta
 → Resultado: 1 sola fila por id=123
 → NO se reporta como duplicado (occurrences=1 → no entra en tabla)
 ```
@@ -693,44 +714,124 @@ CON priorityCol="update_timestamp":
 **Uso en ejecución:**
 
 ```bash
-# Ejemplo 1: Tabla histórica con timestamps
+# Ejemplo 1: Múltiples columnas con orden de precedencia
 spark-submit --class com.santander.cib.adhc.internal_aml_tools.Main \
   cib-adhc-internaltools-1.0.5-SNAPSHOT.jar \
   refTable=default.transactions_history \
   newTable=default.transactions_current \
   compositeKeyCols=transaction_id \
   partitionSpec="data_date_part=2025-11-21/" \
-  priorityCol=update_timestamp \
+  priorityCols=update_timestamp,version,retry_count \
   checkDuplicates=true \
   ...
 
-# Ejemplo 2: Tabla con versionado numérico
+# Ejemplo 2: Una sola columna (backward compatible)
 priorityCol=version_number
+# O equivalente:
+priorityCols=version_number
 
-# Ejemplo 3: Tabla CDC con secuencia
-priorityCol=sequence_id
+# Ejemplo 3: Tabla CDC con timestamp y secuencia
+priorityCols=processing_timestamp,sequence_id
 
-# Ejemplo 4: Tabla con flag de prioridad explícito
-priorityCol=priority_flag  # (valores: 1=alta, 0=baja)
+# Ejemplo 4: Tabla con nombre y prioridad
+priorityCols=name,priority_flag  # name alfabéticamente, luego priority
 ```
 
 **Validaciones automáticas:**
-- ✅ Si `priorityCol` no existe en el schema → Se ignora (sin error)
-- ✅ Si `priorityCol` es NULL/vacío → Se ignora
-- ✅ Si la columna existe → Se aplica correctamente
+- ✅ Si columnas en `priorityCols` no existen en el schema → Se ignoran (sin error)
+- ✅ Si `priorityCols` está vacío → Se ignora
+- ✅ Si las columnas existen → Se aplican en orden de precedencia
 
 **Impacto en métricas:**
 
-| Métrica | Sin priorityCol | Con priorityCol |
-|---------|-----------------|-----------------|
+| Métrica | Sin priorityCols | Con priorityCols |
+|---------|------------------|------------------|
 | **Filas procesadas** | Todas las filas | Solo filas con máxima prioridad |
 | **Duplicados detectados** | Incluye versiones intermedias | Solo duplicados "reales" |
 | **Global Quality** | Penalizado por versiones | Refleja calidad real |
 | **Performance** | Más I/O y procesamiento | Menor volumen, más rápido |
+| **Variations** | Incluye priorityCols | **NO incluye priorityCols** ✅ |
+
+**Diferencia entre Duplicados y Diferencias:**
+
+| Aspecto | Duplicados | Diferencias |
+|---------|------------|-------------|
+| **Particiona por** | Todas las columnas excepto priorityCols | Solo compositeKeyCols |
+| **Mantiene** | Múltiples filas con mismo ID si tienen otros campos diferentes | Solo 1 fila por ID |
+| **priorityCols en variations** | ❌ No aparece | ✅ Aparece en comparación |
+
+---
+
+**⚠️ Comportamiento SIN `priorityCols` (Agregación Automática):**
+
+Cuando **NO** se define `priorityCols` y hay **múltiples filas con la misma clave compuesta**, el sistema aplica **agregaciones automáticas** (`max()` por defecto) para resolver duplicados en diferencias:
+
+**Agregaciones por tipo de dato:**
+
+| Tipo de Dato | Agregación | Comportamiento |
+|--------------|------------|----------------|
+| **Strings** (name, status, etc.) | `max()` | Mayor alfabéticamente (Z > A) |
+| **Numéricos** (balance, amount, etc.) | `max()` | Valor más alto |
+| **Fechas/Timestamps** | `max()` | Fecha más reciente |
+| **Booleanos** | `max()` | `true > false` |
+
+**Ejemplo sin `priorityCols`:**
+
+```sql
+-- Datos REF con id=2 (4 filas duplicadas)
+┌───────┬────────┬─────────┬──────────┐
+│ id    │ name   │ balance │ priority │
+├───────┼────────┼─────────┼──────────┤
+│ 2     │ Bob    │ 180.0   │ 0        │
+│ 2     │ Bob_v1 │ 200.0   │ 4        │
+│ 2     │ Bob_v2 │ 220.0   │ 2        │
+│ 2     │ Bob_v4 │ 255.0   │ 2        │
+└───────┴────────┴─────────┴──────────┘
+
+SIN priorityCols → Agregación automática por columna:
+- name:     max("Bob", "Bob_v1", "Bob_v2", "Bob_v4") = "Bob_v4"  (alfabético)
+- balance:  max(180.0, 200.0, 220.0, 255.0) = 255.0
+- priority: max(0, 2, 4) = 4
+
+Resultado en diferencias:
+→ id=2, name=Bob_v4, balance=255.0, priority=4
+
+✅ Determinista: Siempre produce el mismo resultado
+✅ Consistente: REF y NEW usan la misma lógica
+⚠️  Fila sintética: Combina "mejores valores" de diferentes filas
+```
+
+**Con `priorityCols=priority` (Control Funcional Explícito):**
+
+```sql
+CON priorityCols=priority → Decisión funcional ad hoc:
+"Quiero la fila con MAYOR priority, manteniendo TODOS sus valores"
+
+→ id=2, name=Bob_v1, balance=200.0, priority=4
+
+✅ Fila real: Todos los valores vienen de la MISMA fila original (Bob_v1)
+✅ Control explícito: TÚ decides qué columna(s) determinan la prioridad
+```
+
+**🎯 Diferencia Clave:**
+
+| Aspecto | Sin priorityCols | Con priorityCols |
+|---------|------------------|------------------|
+| **Decisión** | Automática (max por columna) | **Funcional ad hoc** (tú eliges criterio) |
+| **Estrategia** | Agrega columna por columna | Mantiene fila completa |
+| **Resultado** | Fila sintética ("mejores valores") | Fila real (según tu criterio) |
+| **Consistencia** | ✅ Determinista | ✅ Determinista |
+| **Control** | ❌ Automático (no configurable) | ✅ **Explícito** (tú decides) |
+| **Uso recomendado** | Tablas sin duplicados | **Control funcional** sobre duplicados |
 
 **💡 Recomendación:**
-- Si tu tabla tiene campos como `update_timestamp`, `version`, `last_modified_date` → **Usa `priorityCol`**
-- Si cada fila es única por diseño → No uses `priorityCol` (añade overhead innecesario)
+- **Usa `priorityCols`** cuando necesites **control funcional explícito** sobre qué fila mantener
+- Ejemplos de criterios funcionales:
+  - `priorityCols=update_timestamp` → "Quiero la versión más reciente"
+  - `priorityCols=version,retry_count` → "Quiero la versión más alta, y si empate, el mayor retry"
+  - `priorityCols=priority_flag,processing_date` → "Quiero la fila marcada como prioritaria, y si empate, la más reciente"
+- **Sin `priorityCols`**: El sistema usa agregación automática (`max()`), que puede no coincidir con tu lógica de negocio
+- **Con `priorityCols`**: Tú defines explícitamente el criterio funcional de prioridad
 
 ---
 

@@ -196,10 +196,10 @@ object SummaryGenerator extends Serializable {
     DiffSets(exact, variations)
   }
 
-  // Convenience pretty-printer for sample IDs (deterministic ordering)
+  // Convenience pretty-printer for sample IDs (random sampling for diversity)
   private def idsToStr(df: DataFrame, limit: Int = SampleIdsForSummary)(implicit spark: SparkSession): String = {
     import spark.implicits._
-    df.orderBy("cid").limit(limit).as[String].collect().mkString(",")
+    df.orderBy(rand()).limit(limit).as[String].collect().mkString(",")
   }
 
   // Build final rows (KPIs, MATCH/NO MATCH/GAP/DUPS blocks)

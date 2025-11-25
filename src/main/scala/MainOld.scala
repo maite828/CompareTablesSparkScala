@@ -331,7 +331,7 @@ object MainOld extends Logging {
       includeEqualsInDiff          = includeEquals,
       autoCreateTables             = autoCreateTables,
       exportExcelPath              = exportExcelPath,
-      priorityCol                  = priorityCol,
+      priorityCols                 = priorityCol.map(Seq(_)).getOrElse(Seq.empty),
       aggOverrides                 = aggOverrides,
       nullKeyMatches               = nullKeyMatches,
       outputDateISO                = outputDateISO,

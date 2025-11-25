@@ -28,7 +28,7 @@ final case class CompareConfig(
                                 exportExcelPath: Option[String] = None,        // Some("s3a://my-bucket/results/summary.xlsx")
 
                                 // Fields for Diff/Duplicates
-                                priorityCol: Option[String] = None,            // column to prioritize rows (desc_nulls_last)
+                                priorityCols: Seq[String] = Seq.empty,     // columns to prioritize rows (ordered by precedence, desc_nulls_last)
                                 aggOverrides: Map[String, String] = Map.empty, // Map("amount" -> "max")
                                 nullKeyMatches: Boolean = true,                // null-safe equality in keys
 

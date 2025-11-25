@@ -59,8 +59,8 @@ object DuplicateDetector {
     // Join with categories and map to final DTO
     val withCategory = selected.join(categories, Seq("id", "origin"), "left")
 
-    // Map to the final DTO, formatting variation text.
-    withCategory.map(rowToDuplicateOut(_, nonKeys))(Encoders.product[DuplicateOut]).toDF()
+    // Map to the final DTO, formatting variation text (excluding priorityCol if configured).
+    withCategory.map(rowToDuplicateOut(_, nonKeys, config))(Encoders.product[DuplicateOut]).toDF()
   }
 
   // ─────────────────────────── Helpers ───────────────────────────
@@ -70,13 +70,29 @@ object DuplicateDetector {
     refDf.withColumn("_src", lit("ref"))
       .unionByName(newDf.withColumn("_src", lit("new")))
 
-  // If `priorityCol` exists, keep top-1 per (_src + keys) with desc_nulls_last ordering.
+  // If `priorityCols` exists, keep top-1 per group of identical rows (excluding priority columns).
+  // This means: only eliminate duplicates when ALL columns are the same except priorityCols.
+  // Duplicates with variations in other columns are preserved.
+  // Multiple columns are ordered by precedence (first column has highest priority).
   private def applyPriorityIf(config: CompareConfig, df: DataFrame, keys: Seq[String]): DataFrame = {
-    config.priorityCol match {
-      case Some(prio) if df.columns.contains(prio) =>
-        val w = Window.partitionBy(("_src" +: keys).map(col): _*).orderBy(col(prio).desc_nulls_last)
+    if (config.priorityCols.nonEmpty) {
+      // Filter only columns that exist in the DataFrame
+      val existingPriorityCols = config.priorityCols.filter(df.columns.contains)
+      
+      if (existingPriorityCols.nonEmpty) {
+        // Partition by ALL columns except priorityCols (and _rn which we'll add)
+        val partitionCols = df.columns.filterNot(config.priorityCols.contains)
+        
+        // Order by priorityCols in order (first has highest precedence)
+        val orderCols = existingPriorityCols.map(col(_).desc_nulls_last)
+        
+        val w = Window.partitionBy(partitionCols.map(col): _*).orderBy(orderCols: _*)
         df.withColumn("_rn", row_number().over(w)).filter(col("_rn") === 1).drop("_rn")
-      case _ => df
+      } else {
+        df
+      }
+    } else {
+      df
     }
   }
 
@@ -170,15 +186,19 @@ object DuplicateDetector {
   }
 
   // Build output DTO from a grouped row; format variations as "col: [v1,v2] | ..." (skip NullToken).
-  private def rowToDuplicateOut(row: org.apache.spark.sql.Row, nonKeys: Seq[String]): DuplicateOut = {
+  // Exclude priorityCol from variations if configured (it's used to resolve duplicates, not a variation to report).
+  private def rowToDuplicateOut(row: org.apache.spark.sql.Row, nonKeys: Seq[String], config: CompareConfig): DuplicateOut = {
     val origin = row.getAs[String]("origin")
     val id = row.getAs[String]("id")
     val category = row.getAs[String]("category")
     val exact = row.getAs[Long]("exact_dup").toString
     val vdup = row.getAs[Long]("var_dup").toString
     val occ = row.getAs[Long]("occurrences").toString
-
-    val variationsText = buildVariationsText(row, nonKeys)
+    
+    // Exclude ALL priorityCols from variations
+    val nonKeysForVariations = nonKeys.filterNot(config.priorityCols.contains)
+    
+    val variationsText = buildVariationsText(row, nonKeysForVariations)
     DuplicateOut(origin, id, category, exact, vdup, occ, variationsText)
   }
 

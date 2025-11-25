@@ -30,7 +30,7 @@ class AdditionalSpec extends AnyFlatSpec with Matchers with SparkSessionTestWrap
       checkDuplicates     = false,
       includeEqualsInDiff = false,
       autoCreateTables    = false,
-      priorityCol         = None,
+      priorityCols        = Seq.empty,
       aggOverrides        = Map.empty,
       exportExcelPath     = None,
       outputDateISO       = "2025-01-01"
@@ -75,7 +75,7 @@ class AdditionalSpec extends AnyFlatSpec with Matchers with SparkSessionTestWrap
       checkDuplicates     = true,
       includeEqualsInDiff = false,
       autoCreateTables    = false,
-      priorityCol         = Some("ts"),
+      priorityCols        = Seq("ts"),
       aggOverrides        = Map.empty,
       exportExcelPath     = None,
       outputDateISO       = "2025-01-01"
