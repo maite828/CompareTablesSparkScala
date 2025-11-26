@@ -146,13 +146,24 @@ object SummaryGenerator extends Serializable {
   }
 
   private def computeCoreCounts(in: SummaryInputs, ids: IdSets): CoreCounts = {
-    val totalRowsRef = in.refDf.count()
-    val totalRowsNew = in.newDf.count()
+    // Optimize: Compute row counts in parallel (IDs are already cached, so their counts are cheap)
+    // Launch both count() operations in parallel to reduce wall-clock time
+    val totalRowsRefFuture = scala.concurrent.Future(in.refDf.count())(scala.concurrent.ExecutionContext.global)
+    val totalRowsNewFuture = scala.concurrent.Future(in.newDf.count())(scala.concurrent.ExecutionContext.global)
+
+    // While counts run in background, compute ID counts (cached, fast)
     val nRefIds = ids.ref.count()
     val nNewIds = ids.neu.count()
     val nBothIds = ids.both.count()
     val onlyRef = ids.ref.except(ids.neu)
     val onlyNew = ids.neu.except(ids.ref)
+
+    // Wait for row counts to complete
+    import scala.concurrent.Await
+    import scala.concurrent.duration._
+    val totalRowsRef = Await.result(totalRowsRefFuture, 5.minutes)
+    val totalRowsNew = Await.result(totalRowsNewFuture, 5.minutes)
+
     CoreCounts(totalRowsRef, totalRowsNew, nRefIds, nNewIds, nBothIds, onlyRef, onlyNew)
   }
 
