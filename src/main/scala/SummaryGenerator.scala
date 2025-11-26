@@ -1,60 +1,9 @@
-import ComparatorDefaults.SampleIdsForSummary
 
+import ComparatorDefaults.SampleIdsForSummary
 import org.apache.spark.sql.{Column, DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
 
 import scala.collection.immutable.ListMap
-
-case class SummaryRow(
-                       block: String,
-                       metric: String,
-                       universe: String,
-                       numerator: String,
-                       denominator: String,
-                       pct: String,
-                       samples: String
-                     )
-
-// Bundle to reduce parameter count - REMOVED rawDf references
-final case class SummaryInputs(
-                                spark: SparkSession,
-                                refDf: DataFrame,
-                                newDf: DataFrame,
-                                diffDf: DataFrame,
-                                dupDf: DataFrame,
-                                compositeKeyCols: Seq[String]
-                              )
-
-// DTOs to avoid long parameter lists in private helpers.
-final case class IdSets(ref: DataFrame, neu: DataFrame, both: DataFrame)
-final case class CoreCounts(
-                             totalRowsRef: Long,
-                             totalRowsNew: Long,
-                             nRefIds: Long,
-                             nNewIds: Long,
-                             nBothIds: Long,
-                             onlyRef: DataFrame,
-                             onlyNew: DataFrame
-                           )
-final case class DupSets(both: DataFrame, onlyRef: DataFrame, onlyNew: DataFrame, any: DataFrame)
-final case class DiffSets(exact: DataFrame, variations: DataFrame)
-final case class MetricCounts(
-                               totalRowsRef: Long,
-                               totalRowsNew: Long,
-                               nRefIds: Long,
-                               nNewIds: Long,
-                               nBothIds: Long,
-                               qualityOk: Long
-                             )
-final case class MetricSets(
-                             idsExact: DataFrame,
-                             idsVariations: DataFrame,
-                             idsOnlyR: DataFrame,
-                             idsOnlyN: DataFrame,
-                             dupIdsBoth: DataFrame,
-                             dupIdsOnlyRef: DataFrame,
-                             dupIdsOnlyNew: DataFrame
-                           )
 
 case class SummaryRow(
                        block: String,
