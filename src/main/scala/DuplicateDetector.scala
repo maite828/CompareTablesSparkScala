@@ -1,4 +1,5 @@
-import ComparatorDefaults.{HashNullToken, HashSeparator, Sha256Bits}
+
+import ComparatorDefaults.{HashNullToken, HashSeparator, MinOccurrencesToBeDuplicate, Sha256Bits}
 import org.apache.spark.sql.{Column, DataFrame, Encoders, SparkSession}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
@@ -78,14 +79,14 @@ object DuplicateDetector {
     if (config.priorityCols.nonEmpty) {
       // Filter only columns that exist in the DataFrame
       val existingPriorityCols = config.priorityCols.filter(df.columns.contains)
-      
+
       if (existingPriorityCols.nonEmpty) {
         // Partition by ALL columns except priorityCols (and _rn which we'll add)
         val partitionCols = df.columns.filterNot(config.priorityCols.contains)
-        
+
         // Order by priorityCols in order (first has highest precedence)
         val orderCols = existingPriorityCols.map(col(_).desc_nulls_last)
-        
+
         val w = Window.partitionBy(partitionCols.map(col): _*).orderBy(orderCols: _*)
         df.withColumn("_rn", row_number().over(w)).filter(col("_rn") === 1).drop("_rn")
       } else {
@@ -138,7 +139,7 @@ object DuplicateDetector {
     hashed
       .groupBy((col("_src") +: keys.map(col)): _*)
       .agg((baseAggs ++ variationAggs).head, (baseAggs ++ variationAggs).tail: _*)
-      .filter(col("occurrences") > 1)
+      .filter(col("occurrences") >= MinOccurrencesToBeDuplicate)
   }
 
   // Select final columns and build a NULL-safe composite ID for the key.
@@ -194,10 +195,10 @@ object DuplicateDetector {
     val exact = row.getAs[Long]("exact_dup").toString
     val vdup = row.getAs[Long]("var_dup").toString
     val occ = row.getAs[Long]("occurrences").toString
-    
+
     // Exclude ALL priorityCols from variations
     val nonKeysForVariations = nonKeys.filterNot(config.priorityCols.contains)
-    
+
     val variationsText = buildVariationsText(row, nonKeysForVariations)
     DuplicateOut(origin, id, category, exact, vdup, occ, variationsText)
   }

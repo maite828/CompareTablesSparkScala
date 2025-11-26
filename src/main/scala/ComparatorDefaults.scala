@@ -1,14 +1,16 @@
+
 /** Centraliza valores “mágicos” para legibilidad y control. */
 object ComparatorDefaults {
   // Spark / IO
   final val ShufflePartitionsDefault    = 100
   final val FileOutputCommitterAlgV2    = 2
   final val Sha256Bits                  = 256
+  final val MaxRecordsPerFile           = 671088    // ~128MB target per output file
 
   // Límites de logging / muestreo
   final val MaxOrderMismatchesToLog     = 50
   final val MaxTypeDiffsToLog           = 100
-  final val SampleIdsForSummary         = 6
+  final val SampleIdsForSummary         = 10
 
   // Duplicados / diffs
   final val MinOccurrencesToBeDuplicate = 2          // >1 → duplicado

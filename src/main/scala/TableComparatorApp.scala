@@ -1,247 +1,285 @@
-import org.apache.spark.internal.Logging
-import org.apache.spark.sql.SparkSession
 
-import java.time.LocalDate
+import org.apache.spark.sql.DataFrame
+import scala.collection.mutable.ArrayBuffer
+import scala.math.min
+import ComparatorDefaults.{
+  MaxOrderMismatchesToLog, MaxTypeDiffsToLog
+}
 
-class TableComparatorApp()(implicit spark: SparkSession) extends Logging {
+object SchemaChecker {
 
-  // ─────────────────────────── logger + println (double logging) ───────────────────────────
-  private def info(msg: String): Unit = { log.info(msg); println(msg) }
-  private def warn(msg: String): Unit = { log.warn(msg); println(msg) }
-  private def err (msg: String): Unit = { log.error(msg); println(msg) }
+  // How many missing columns to print at most (per side) to avoid log floods.
+  private val MaxMissingToLog: Int = MaxOrderMismatchesToLog
 
-  // ---------------------------- KV helpers ----------------------------
-  private def isBlank(s: String): Boolean = (s == null) || s.trim.isEmpty
+  final case class ColumnDiff(
+                               name: String,
+                               refType: String,
+                               newType: String,
+                               issue: String, // "type-mismatch" | "nullable-mismatch" | "metadata-mismatch"
+                               refNullable: Option[Boolean] = None,
+                               newNullable: Option[Boolean] = None
+                             )
 
-  private val KvPattern = """^\s*([^=]+)\s*=\s*(.*)\s*$""".r
-  private def stripQuotes(s: String): String =
-    s.replaceAll("""^\s*['"]|['"]\s*$""", "")
+  final case class SchemaReport(
+                                 refColCount: Int,
+                                 newColCount: Int,
+                                 missingInNew: Seq[String],
+                                 missingInRef: Seq[String],
+                                 typeDiffs: Seq[ColumnDiff], // limited to MaxTypeDiffsToLog for logging
+                                 typeDiffsTotal: Int, // total number of type/nullability/metadata diffs
+                                 orderMatches: Boolean,
+                                 orderMismatches: Seq[String], // limited to MaxOrderMismatchesToLog for logging
+                                 orderMismatchesTotal: Int // total number of order mismatches
+                               )
 
-  // Parse "k=v" keeping inner quotes; removes only outer quotes.
-  private def parseKvArg(s: String): Option[(String, String)] = s match {
-    case null => None
-    case KvPattern(k, vRaw) =>
-      val k1 = Option(k).map(_.trim).getOrElse("")
-      if (k1.isEmpty) { None } else { Some(k1 -> stripQuotes(vRaw)) }
-    case _ => None
-  }
+  // ─────────────────────────── Public API ───────────────────────────
 
-  private def csvToSeq(s: String): Seq[String] =
-    if (isBlank(s)) { Seq.empty }
-    else { s.split(",").iterator.map(_.trim).filter(_.nonEmpty).toSeq }
+  // Basic comparison (backward compatible).
+  def compare(ref: DataFrame, neu: DataFrame): (Seq[String], Seq[String], Seq[ColumnDiff]) = {
+    val rmap = ref.schema.fields.map(f => f.name -> f).toMap
+    val nmap = neu.schema.fields.map(f => f.name -> f).toMap
 
-  private def requireArg(kv: Map[String, String], k: String): String = {
-    val value = kv.getOrElse(k, "")
-    if (value == null || value.isEmpty) {
-      val msg = s"Missing required arg: $k"
-      err(msg); throw new IllegalArgumentException(msg)
-    }
-    value
-  }
+    val missingInNew = (rmap.keySet -- nmap.keySet).toSeq.sorted
+    val missingInRef = (nmap.keySet -- rmap.keySet).toSeq.sorted
 
-  private def normalizeTablePrefix(raw: String): String =
-    if (raw.endsWith("_")) raw else s"${raw}_"
+    val commons = (rmap.keySet intersect nmap.keySet).toSeq
+    val typeDiffsBuf = ArrayBuffer[ColumnDiff]()
 
-  private def parseBooleans(kv: Map[String, String]): (Boolean, Boolean) = {
-    val checkDuplicates = kv.get("checkDuplicates").exists(_.trim.equalsIgnoreCase("true"))
-    val includeEquals = kv.get("includeEqualsInDiff").exists(_.trim.equalsIgnoreCase("true"))
-    (checkDuplicates, includeEquals)
-  }
-
-  private def normalizePartitionSpec(rawSpecOpt: Option[String], executionDate: String): Option[String] = {
-    val norm = PartitionFormatTool.normalizeKvPartitionSpec(rawSpecOpt, executionDate)
-    info(s"[DEBUG] partitionSpec (normalized KV): ${norm.getOrElse("<none>")}")
-    norm
-  }
-
-  private def extractOutputDate(partitionSpec: Option[String], defaultExecDate: String): String = {
-    val iso = PartitionFormatTool.extractDateOr(partitionSpec, defaultExecDate)
-    info(s"[DEBUG] outputDateISO (for data_date_part): $iso")
-    iso
-  }
-
-  // ─────────────────────────── Nuevos helpers: ventanas/overrides por lado ───────────────────────────
-  private val WindowRx = """^\s*([+-]?\d+)\s*\.\.\s*([+-]?\d+)\s*$""".r
-
-  private def parseWindow(s: String): Option[(Int, Int)] = s match {
-    case null => None
-    case WindowRx(a, b) =>
-      try Some(a.toInt -> b.toInt) catch { case _: Throwable => None }
-    case _ => None
-  }
-
-  private def expandDates(centerISO: String, start: Int, end: Int): Seq[String] = {
-    val base = LocalDate.parse(centerISO)
-    (start to end).map(delta => base.plusDays(delta.toLong).toString)
-  }
-
-  /** Inserta o sustituye data_date_part con lista [d1,d2,...] en una spec existente. */
-  private def upsertDates(specOpt: Option[String], dates: Seq[String]): Option[String] = {
-    if (dates == null || dates.isEmpty) specOpt
-    else {
-      val list = s"[${dates.mkString(",")}]"
-      specOpt match {
-        case None => Some(s"data_date_part=$list")
-        case Some(specRaw) =>
-          val spec = specRaw.trim
-          if (spec.isEmpty) Some(s"data_date_part=$list")
-          else {
-            val rx = "data_date_part\\s*=\\s*[^/]+"
-            if (spec.matches(s".*${rx}.*"))
-              Some(spec.replaceAll(rx, s"data_date_part=$list"))
-            else
-              Some(if (spec.endsWith("/")) s"${spec}data_date_part=$list" else s"$spec/data_date_part=$list")
-          }
+    commons.foreach { c =>
+      val rf = rmap(c);
+      val nf = nmap(c)
+      if (rf.dataType.simpleString != nf.dataType.simpleString) {
+        typeDiffsBuf += ColumnDiff(c, rf.dataType.simpleString, nf.dataType.simpleString, "type-mismatch", Some(rf.nullable), Some(nf.nullable))
+      }
+      if (rf.nullable != nf.nullable) {
+        typeDiffsBuf += ColumnDiff(c, rf.dataType.simpleString, nf.dataType.simpleString, "nullable-mismatch", Some(rf.nullable), Some(nf.nullable))
+      }
+      if (rf.metadata != nf.metadata) {
+        typeDiffsBuf += ColumnDiff(c, rf.dataType.simpleString, nf.dataType.simpleString, "metadata-mismatch", Some(rf.nullable), Some(nf.nullable))
       }
     }
+
+    (missingInNew, missingInRef, typeDiffsBuf.toSeq.sortBy(_.name))
   }
 
-  private def buildConfig(kv: Map[String, String]): CompareConfig = {
-    val refTable = requireArg(kv, "refTable")
-    val newTable = requireArg(kv, "newTable")
-    val initiativeName = requireArg(kv, "initiativeName")
-    val tablePrefixRaw = requireArg(kv, "tablePrefix")
-    val outputBucket = requireArg(kv, "outputBucket")
-    val executionDate = requireArg(kv, "executionDate") // yyyy-MM-dd
+  // Exhaustive comparison: names, types, nullability, metadata and ORDER.
+  def analyze(ref: DataFrame, neu: DataFrame): SchemaReport = {
+    val refFields = ref.schema.fields
+    val newFields = neu.schema.fields
 
-    val tablePrefix = normalizeTablePrefix(tablePrefixRaw)
-    val compositeKeyCols = csvToSeq(kv.getOrElse("compositeKeyCols", ""))
-    val ignoreCols = csvToSeq(kv.getOrElse("ignoreCols", ""))
+    val refNames = refFields.map(_.name)
+    val newNames = newFields.map(_.name)
 
-    val (checkDuplicates, includeEquals) = parseBooleans(kv)
+    val (missingInNew, missingInRef) = missingColumns(refNames, newNames)
 
-    val rawSpecOpt = kv.get("partitionSpec")
-    val partitionSpec = normalizePartitionSpec(rawSpecOpt, executionDate)
-    val outputDateISO = extractOutputDate(partitionSpec, executionDate)
+    // Limited logging builders (collect up to limit, count all)
+    val (typeDiffsLimited, typeDiffsTotal) =
+      buildTypeDiffsLimited(refFields.map(f => f.name -> f).toMap, newFields.map(f => f.name -> f).toMap, MaxTypeDiffsToLog)
 
-    // ---- overrides por lado (precedencia: direct > window > partitionSpec) ----
-    // 1) Overrides directos
-    val refSpecDirect = kv.get("refPartitionSpec")
-      .flatMap(s => PartitionFormatTool.normalizeKvPartitionSpec(Option(s), executionDate))
-    val newSpecDirect = kv.get("newPartitionSpec")
-      .flatMap(s => PartitionFormatTool.normalizeKvPartitionSpec(Option(s), executionDate))
+    val orderMatches = refNames.sameElements(newNames)
+    val (orderLimited, orderTotal) =
+      if (orderMatches) (Seq.empty[String], 0) else orderDiffsLimited(refNames, newNames, MaxOrderMismatchesToLog)
 
-    // 2) Ventanas compactas por lado: "refWindowDays=-2..+3", "newWindowDays=0..+1"
-    val refSpecWindow = kv.get("refWindowDays").flatMap(parseWindow).flatMap {
-      case (start, end) =>
-        val dates = expandDates(outputDateISO, start, end)
-        upsertDates(partitionSpec, dates)
-    }
-
-    val newSpecWindow = kv.get("newWindowDays").flatMap(parseWindow).flatMap {
-      case (start, end) =>
-        val dates = expandDates(outputDateISO, start, end)
-        upsertDates(partitionSpec, dates)
-    }
-
-    val refSpecOverride = refSpecDirect.orElse(refSpecWindow)
-    val newSpecOverride = newSpecDirect.orElse(newSpecWindow)
-
-    // Optional per-side filters (Spark SQL expresions)
-    val refFilter = kv.get("refFilter").filter(_.nonEmpty)
-    val newFilter = kv.get("newFilter").filter(_.nonEmpty)
-    info(s"[DEBUG] refFilter: ${refFilter.getOrElse("<none>")}, newFilter: ${newFilter.getOrElse("<none>")}")
-
-    // Optional priority columns for duplicate detection (keeps highest value per group)
-    // Supports both formats:
-    //   - priorityCols=col1,col2,col3 (multiple columns with precedence order)
-    //   - priorityCol=col1 (single column, backward compatibility)
-    val priorityColsFromMulti = kv.get("priorityCols")
-      .map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq)
-      .getOrElse(Seq.empty)
-    
-    val priorityColFromSingle = kv.get("priorityCol")
-      .filter(_.nonEmpty)
-      .map(Seq(_))
-      .getOrElse(Seq.empty)
-    
-    // Precedence: priorityCols > priorityCol
-    val priorityCols = if (priorityColsFromMulti.nonEmpty) {
-      priorityColsFromMulti
-    } else {
-      priorityColFromSingle
-    }
-    
-    info(s"[DEBUG] priorityCols: ${if (priorityCols.isEmpty) "<none>" else priorityCols.mkString(",")}")
-
-    CompareConfig(
-      spark = spark,
-      refTable = refTable,
-      newTable = newTable,
-      partitionSpec = partitionSpec,
-      compositeKeyCols = compositeKeyCols,
-      ignoreCols = ignoreCols,
-      initiativeName = initiativeName,
-      tablePrefix = tablePrefix,
-      outputBucket = outputBucket,
-      checkDuplicates = checkDuplicates,
-      includeEqualsInDiff = includeEquals,
-      priorityCols = priorityCols,
-      aggOverrides = Map.empty,
-      outputDateISO = outputDateISO,
-      // nuevos campos:
-      refPartitionSpecOverride = refSpecOverride,
-      newPartitionSpecOverride = newSpecOverride,
-      refFilter = refFilter,
-      newFilter = newFilter,
-      columnMapping = kv.collect {
-        case (k, v) if k.startsWith("colMap.") => k.stripPrefix("colMap.") -> v
-      }
+    SchemaReport(
+      refColCount = refNames.length,
+      newColCount = newNames.length,
+      missingInNew = missingInNew,
+      missingInRef = missingInRef,
+      typeDiffs = typeDiffsLimited,
+      typeDiffsTotal = typeDiffsTotal,
+      orderMatches = orderMatches,
+      orderMismatches = orderLimited,
+      orderMismatchesTotal = orderTotal
     )
   }
 
-  // ---------------------------- Entry point ----------------------------
-  def execute(args: Array[String]): Unit = {
-    info(s"[Driver] Starting TableComparatorApp in KV-only mode")
-    info(s"[DEBUG] KV-mode args count: ${if (args == null) -1 else args.length}")
+  // Formatted log of the report, info/warn
+  def log(report: SchemaReport, info: String => Unit, warn: String => Unit): Unit = {
+    logHeader(report, info)
+    logOrder(report, info, warn)
+    logMissing(report, warn, info)
+    logTypeDiffs(report, warn, info)
+    logSummary(report, info, warn)
+  }
 
-    if (args == null || args.isEmpty) {
-      val msg = "[Driver] Missing KV args"
-      err(msg); throw new IllegalArgumentException(msg)
+  // ─────────────────────────── Helpers ───────────────────────────
+
+  private def missingColumns(refNames: Array[String], newNames: Array[String]): (Seq[String], Seq[String]) = {
+    val rset = refNames.toSet
+    val nset = newNames.toSet
+    val missingInNew = (rset -- nset).toSeq.sorted
+    val missingInRef = (nset -- rset).toSeq.sorted
+    (missingInNew, missingInRef)
+  }
+
+  private def buildTypeDiffsLimited(
+                                     refMap: Map[String, org.apache.spark.sql.types.StructField],
+                                     newMap: Map[String, org.apache.spark.sql.types.StructField],
+                                     limit: Int
+                                   ): (Seq[ColumnDiff], Int) = {
+    val commons = (refMap.keySet intersect newMap.keySet).toSeq.sorted
+    val shown = ArrayBuffer[ColumnDiff]()
+    var total = 0
+
+    commons.foreach { c =>
+      val rf = refMap(c);
+      val nf = newMap(c)
+
+      if (rf.dataType.simpleString != nf.dataType.simpleString) {
+        total += 1
+        if (shown.size < limit) {
+          shown += ColumnDiff(c, rf.dataType.simpleString, nf.dataType.simpleString, "type-mismatch", Some(rf.nullable), Some(nf.nullable))
+        }
+      }
+      if (rf.nullable != nf.nullable) {
+        total += 1
+        if (shown.size < limit) {
+          shown += ColumnDiff(c, rf.dataType.simpleString, nf.dataType.simpleString, "nullable-mismatch", Some(rf.nullable), Some(nf.nullable))
+        }
+      }
+      if (rf.metadata != nf.metadata) {
+        total += 1
+        if (shown.size < limit) {
+          shown += ColumnDiff(c, rf.dataType.simpleString, nf.dataType.simpleString, "metadata-mismatch", Some(rf.nullable), Some(nf.nullable))
+        }
+      }
+    }
+    (shown.toSeq, total)
+  }
+
+  private def orderDiffsLimited(refNames: Array[String], newNames: Array[String], limit: Int): (Seq[String], Int) = {
+    val msgs = ArrayBuffer[String]()
+    var total = 0
+    val upto = min(refNames.length, newNames.length)
+
+    var i = 0
+    while (i < upto) {
+      val rn = refNames(i);
+      val nn = newNames(i)
+      if (rn != nn) {
+        total += 1
+        if (msgs.size < limit) msgs += s"idx=$i: REF='$rn' vs NEW='$nn'"
+      }
+      i += 1
+    }
+    if (refNames.length > newNames.length) {
+      var j = newNames.length
+      while (j < refNames.length) {
+        total += 1
+        if (msgs.size < limit) msgs += s"idx=$j: REF extra '${refNames(j)}'"
+        j += 1
+      }
+    } else if (newNames.length > refNames.length) {
+      var j = refNames.length
+      while (j < newNames.length) {
+        total += 1
+        if (msgs.size < limit) msgs += s"idx=$j: NEW extra '${newNames(j)}'"
+        j += 1
+      }
+    }
+    (msgs.toSeq, total)
+  }
+
+  private def logHeader(r: SchemaReport, info: String => Unit): Unit = {
+    info(s"[SCHEMA] REF cols=${r.refColCount} | NEW cols=${r.newColCount}")
+    info(s"[SCHEMA] ✓ Both tables have ${r.refColCount} total columns (including partitions)")
+  }
+
+  private def logOrder(r: SchemaReport, info: String => Unit, warn: String => Unit): Unit = {
+    if (r.orderMatches) {
+      info("[SCHEMA] ✓ Column order: OK (identical sequences).")
+    } else {
+      warn("[SCHEMA] ⚠ Column order: MISMATCH (non-critical - Spark compares by name, not position)")
+      if (r.orderMismatches.nonEmpty) {
+        val lines = r.orderMismatches.mkString("\n  - ")
+        warn(s"[SCHEMA] First order differences (max $MaxOrderMismatchesToLog of ${r.orderMismatchesTotal}):\n  - $lines")
+        if (r.orderMismatchesTotal > r.orderMismatches.size) {
+          warn(s"[SCHEMA] ... (${r.orderMismatchesTotal - r.orderMismatches.size} additional order differences)")
+        }
+      } else if (r.orderMismatchesTotal > 0) {
+        warn(s"[SCHEMA] Order differences: ${r.orderMismatchesTotal} (omitted from logs)")
+      }
+      info("[SCHEMA] → Impact: NONE - Column order does not affect comparison logic")
+    }
+  }
+
+  private def logMissing(r: SchemaReport, warn: String => Unit, info: String => Unit): Unit = {
+    def logSide(tag: String, xs: Seq[String]): Unit = {
+      if (xs.nonEmpty) {
+        val head = xs.take(MaxMissingToLog)
+        val isPartitionCol = head.exists(c => c.contains("partition") || c.contains("process_") || c == "geo" || c == "data_date_part")
+        val prefix = if (isPartitionCol) "✓" else "⚠"
+        warn(s"[SCHEMA] $prefix Columns only in $tag (${xs.size}): ${head.mkString(",")}${if (xs.size > head.size) s", ... (+${xs.size - head.size})" else ""}")
+        if (isPartitionCol) {
+          info(s"[SCHEMA] → Impact: Expected (partition columns) - These will NOT be compared")
+        } else {
+          info(s"[SCHEMA] → Impact: These columns will appear as ONLY_IN_$tag in differences table")
+        }
+      }
     }
 
-    val kv: Map[String, String] = args.flatMap(parseKvArg).toMap
-    info(s"[DEBUG] KV received keys: ${kv.keys.toSeq.sorted.mkString(",")}")
-
-    val cfg = buildConfig(kv)
-
-    info("[Driver] Calling TableComparisonController.run(cfg)")
-    TableComparisonController.run(cfg)
-
-    // showComparisonResults(spark, cfg.tablePrefix, cfg.initiativeName, cfg.outputDateISO)
-    info(s"[DEBUG] execDateForFilter: ${cfg.outputDateISO}")
-    info("[Driver] KV-mode comparison finished.")
+    logSide("REF", r.missingInNew)
+    logSide("NEW", r.missingInRef)
   }
 
-  // helper for manual inspection On demand test
-  private def showComparisonResults(
-                                     spark: SparkSession,
-                                     prefix: String,
-                                     initiative: String,
-                                     datePart: String
-                                   ): Unit = {
-    def q(table: String) =
-      s"""
-         |SELECT *
-         |FROM $table
-         |WHERE initiative = '$initiative'
-         |  AND data_date_part = '$datePart'
-         |""".stripMargin
+  private def logTypeDiffs(r: SchemaReport, warn: String => Unit, info: String => Unit): Unit = {
+    if (r.typeDiffsTotal > 0) {
+      val onlyMetadata = r.typeDiffs.forall(_.issue == "metadata-mismatch")
+      val prefix = if (onlyMetadata) "⚠" else "❌"
+      warn(s"[SCHEMA] $prefix Type/nullability/metadata differences (showing up to $MaxTypeDiffsToLog of ${r.typeDiffsTotal}):")
+      if (r.typeDiffs.nonEmpty) {
+        val toShow = r.typeDiffs.map { d =>
+          val nul = (d.refNullable, d.newNullable) match {
+            case (Some(rn), Some(nn)) => s" | nullable $rn vs $nn"
+            case _ => ""
+          }
+          s"  - ${d.name}: ${d.issue} | type ${d.refType} vs ${d.newType}$nul"
+        }.mkString("\n")
+        warn(toShow)
+      }
+      if (r.typeDiffsTotal > r.typeDiffs.size) {
+        warn(s"[SCHEMA] ... (${r.typeDiffsTotal - r.typeDiffs.size} additional type differences)")
+      }
 
-    info(s"\n-- Differences (${prefix}differences) --")
-    spark.sql(q(prefix + "differences")).show(false)
-
-    info(s"\n-- Summary (${prefix}summary) --")
-    spark.sql(q(prefix + "summary")).show(false)
-
-    info(s"\n-- Duplicates (${prefix}duplicates) --")
-    spark.sql(q(prefix + "duplicates")).show(false)
+      // Explain impact
+      if (onlyMetadata) {
+        info("[SCHEMA] → Impact: MINIMAL - Only metadata differs (Hive comments, etc.), values will compare correctly")
+      } else {
+        val hasTypeMismatch = r.typeDiffs.exists(_.issue == "type-mismatch")
+        val hasNullableMismatch = r.typeDiffs.exists(_.issue == "nullable-mismatch")
+        if (hasTypeMismatch) {
+          warn("[SCHEMA] → Impact: CRITICAL - Type mismatches may cause comparison errors or incorrect results")
+        }
+        if (hasNullableMismatch) {
+          info("[SCHEMA] → Impact: MODERATE - Nullability differences may affect null handling in joins")
+        }
+      }
+    }
   }
-}
 
-object TableComparatorApp {
-  def execute(args: Array[String])(implicit spark: SparkSession): Unit = {
-    val app = new TableComparatorApp()
-    app.execute(args)
+  private def logSummary(r: SchemaReport, info: String => Unit, warn: String => Unit): Unit = {
+    val identical =
+      r.orderMatches &&
+        r.missingInNew.isEmpty &&
+        r.missingInRef.isEmpty &&
+        r.typeDiffsTotal == 0
+
+    if (identical) {
+      info("[SCHEMA] ✓ REF and NEW are IDENTICAL (names + order + types + nullability + metadata).")
+      info("[SCHEMA] → Ready to compare: All columns will be compared")
+    } else {
+      // Calculate comparable columns
+      val commonCols = r.refColCount - r.missingInNew.size
+      val onlyMetadata = r.typeDiffsTotal > 0 && r.typeDiffs.forall(_.issue == "metadata-mismatch")
+      val critical = r.typeDiffs.exists(d => d.issue == "type-mismatch" || d.issue == "nullable-mismatch")
+
+      if (critical) {
+        warn("[SCHEMA] ❌ CRITICAL schema differences detected - Review type/nullability mismatches above")
+      } else if (onlyMetadata || r.missingInNew.nonEmpty || r.missingInRef.nonEmpty || !r.orderMatches) {
+        warn("[SCHEMA] ⚠ Schema differences detected (see details above) - Non-critical, comparison will proceed")
+      }
+
+      info(s"[SCHEMA] → Ready to compare: $commonCols common columns (excluding partition columns and mismatches)")
+    }
   }
 }

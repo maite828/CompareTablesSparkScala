@@ -40,7 +40,7 @@ echo "----------------------------------------------------------------"
   colMap.balance=saldo \
   colMap.data_date_part=fecha_proceso \
   colMap.geo=pais \
-  priorityCols=balance,name,priority \
+  priorityCols=balance,name \
   #refFilter="id = 1" \
   #newFilter="id_v2 = 1"
 

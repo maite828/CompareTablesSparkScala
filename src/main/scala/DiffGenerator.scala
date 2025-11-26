@@ -1,8 +1,10 @@
+
+import ComparatorDefaults.{DistinctCheckLimit, SingleDistinctCount}
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.{Column, DataFrame, Row, SparkSession}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
-import org.apache.spark.sql.{Column, DataFrame, Row, SparkSession}
 
 import java.util.Locale
 
@@ -46,7 +48,7 @@ object DiffGenerator extends Logging {
   }
 
   private def isConstantColumn(df: DataFrame, colName: String): Boolean =
-    df.select(col(colName)).distinct().limit(2).count() <= 1
+    df.select(col(colName)).distinct().limit(DistinctCheckLimit).count() <= SingleDistinctCount
 
   // Constructs the struct for EXACT_MATCH with fixed formatting.
   private def buildExactMatchStruct(keyCols: Seq[String]): Column = {
@@ -142,11 +144,11 @@ object DiffGenerator extends Logging {
   private def preOrderByPriority(df: DataFrame, keys: Seq[String], config: CompareConfig): DataFrame = {
     if (config.priorityCols.nonEmpty) {
       val existingPriorityCols = config.priorityCols.filter(df.columns.contains)
-      
+
       if (existingPriorityCols.nonEmpty) {
         // Order by priorityCols in order (first has highest precedence)
         val orderCols = existingPriorityCols.map(col(_).desc_nulls_last)
-        
+
         val w = Window.partitionBy(keys.map(col): _*).orderBy(orderCols: _*)
         df.withColumn("_rn", row_number().over(w)).filter(col("_rn") === 1).drop("_rn")
       } else {

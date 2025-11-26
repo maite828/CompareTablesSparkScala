@@ -1,3 +1,4 @@
+
 import ComparatorDefaults.{MaxOrderMismatchesToLog, MaxTypeDiffsToLog}
 import org.apache.spark.sql.DataFrame
 
@@ -7,7 +8,7 @@ import scala.math.min
 object SchemaChecker {
 
   // How many missing columns to print at most (per side) to avoid log floods.
-  private val MaxMissingToLog: Int = 50
+  private val MaxMissingToLog: Int = MaxOrderMismatchesToLog
 
   final case class ColumnDiff(
                                name: String,
@@ -23,11 +24,11 @@ object SchemaChecker {
                                  newColCount: Int,
                                  missingInNew: Seq[String],
                                  missingInRef: Seq[String],
-                                 typeDiffs: Seq[ColumnDiff],       // limited to MaxTypeDiffsToLog for logging
-                                 typeDiffsTotal: Int,              // total number of type/nullability/metadata diffs
+                                 typeDiffs: Seq[ColumnDiff], // limited to MaxTypeDiffsToLog for logging
+                                 typeDiffsTotal: Int, // total number of type/nullability/metadata diffs
                                  orderMatches: Boolean,
-                                 orderMismatches: Seq[String],     // limited to MaxOrderMismatchesToLog for logging
-                                 orderMismatchesTotal: Int         // total number of order mismatches
+                                 orderMismatches: Seq[String], // limited to MaxOrderMismatchesToLog for logging
+                                 orderMismatchesTotal: Int // total number of order mismatches
                                )
 
   // ─────────────────────────── Public API ───────────────────────────
@@ -44,7 +45,8 @@ object SchemaChecker {
     val typeDiffsBuf = ArrayBuffer[ColumnDiff]()
 
     commons.foreach { c =>
-      val rf = rmap(c); val nf = nmap(c)
+      val rf = rmap(c);
+      val nf = nmap(c)
       if (rf.dataType.simpleString != nf.dataType.simpleString) {
         typeDiffsBuf += ColumnDiff(c, rf.dataType.simpleString, nf.dataType.simpleString, "type-mismatch", Some(rf.nullable), Some(nf.nullable))
       }
@@ -119,7 +121,8 @@ object SchemaChecker {
     var total = 0
 
     commons.foreach { c =>
-      val rf = refMap(c); val nf = newMap(c)
+      val rf = refMap(c);
+      val nf = newMap(c)
 
       if (rf.dataType.simpleString != nf.dataType.simpleString) {
         total += 1
@@ -150,7 +153,8 @@ object SchemaChecker {
 
     var i = 0
     while (i < upto) {
-      val rn = refNames(i); val nn = newNames(i)
+      val rn = refNames(i);
+      val nn = newNames(i)
       if (rn != nn) {
         total += 1
         if (msgs.size < limit) msgs += s"idx=$i: REF='$rn' vs NEW='$nn'"
@@ -212,6 +216,7 @@ object SchemaChecker {
         }
       }
     }
+
     logSide("REF", r.missingInNew)
     logSide("NEW", r.missingInRef)
   }
@@ -234,7 +239,7 @@ object SchemaChecker {
       if (r.typeDiffsTotal > r.typeDiffs.size) {
         warn(s"[SCHEMA] ... (${r.typeDiffsTotal - r.typeDiffs.size} additional type differences)")
       }
-      
+
       // Explain impact
       if (onlyMetadata) {
         info("[SCHEMA] → Impact: MINIMAL - Only metadata differs (Hive comments, etc.), values will compare correctly")
@@ -266,13 +271,13 @@ object SchemaChecker {
       val commonCols = r.refColCount - r.missingInNew.size
       val onlyMetadata = r.typeDiffsTotal > 0 && r.typeDiffs.forall(_.issue == "metadata-mismatch")
       val critical = r.typeDiffs.exists(d => d.issue == "type-mismatch" || d.issue == "nullable-mismatch")
-      
+
       if (critical) {
         warn("[SCHEMA] ❌ CRITICAL schema differences detected - Review type/nullability mismatches above")
       } else if (onlyMetadata || r.missingInNew.nonEmpty || r.missingInRef.nonEmpty || !r.orderMatches) {
         warn("[SCHEMA] ⚠ Schema differences detected (see details above) - Non-critical, comparison will proceed")
       }
-      
+
       info(s"[SCHEMA] → Ready to compare: $commonCols common columns (excluding partition columns and mismatches)")
     }
   }

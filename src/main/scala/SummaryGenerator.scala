@@ -1,9 +1,60 @@
-
 import ComparatorDefaults.SampleIdsForSummary
+
 import org.apache.spark.sql.{Column, DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
 
 import scala.collection.immutable.ListMap
+
+case class SummaryRow(
+                       block: String,
+                       metric: String,
+                       universe: String,
+                       numerator: String,
+                       denominator: String,
+                       pct: String,
+                       samples: String
+                     )
+
+// Bundle to reduce parameter count - REMOVED rawDf references
+final case class SummaryInputs(
+                                spark: SparkSession,
+                                refDf: DataFrame,
+                                newDf: DataFrame,
+                                diffDf: DataFrame,
+                                dupDf: DataFrame,
+                                compositeKeyCols: Seq[String]
+                              )
+
+// DTOs to avoid long parameter lists in private helpers.
+final case class IdSets(ref: DataFrame, neu: DataFrame, both: DataFrame)
+final case class CoreCounts(
+                             totalRowsRef: Long,
+                             totalRowsNew: Long,
+                             nRefIds: Long,
+                             nNewIds: Long,
+                             nBothIds: Long,
+                             onlyRef: DataFrame,
+                             onlyNew: DataFrame
+                           )
+final case class DupSets(both: DataFrame, onlyRef: DataFrame, onlyNew: DataFrame, any: DataFrame)
+final case class DiffSets(exact: DataFrame, variations: DataFrame)
+final case class MetricCounts(
+                               totalRowsRef: Long,
+                               totalRowsNew: Long,
+                               nRefIds: Long,
+                               nNewIds: Long,
+                               nBothIds: Long,
+                               qualityOk: Long
+                             )
+final case class MetricSets(
+                             idsExact: DataFrame,
+                             idsVariations: DataFrame,
+                             idsOnlyR: DataFrame,
+                             idsOnlyN: DataFrame,
+                             dupIdsBoth: DataFrame,
+                             dupIdsOnlyRef: DataFrame,
+                             dupIdsOnlyNew: DataFrame
+                           )
 
 case class SummaryRow(
                        block: String,
@@ -74,6 +125,7 @@ object SummaryGenerator extends Serializable {
       val dif  = computeDiffSets(in, ids)
 
       // qualityOk = exact matches among IDs present on both sides and NOT duplicated on either side
+      // IMPORTANT: Use nBothIds as denominator (not nRefIds) to ensure coherence - only IDs in both sides can have quality
       val qualityOk = dif.exact.except(dups.any).count()
 
       // Cache sets that are used for (count + sample) to avoid recomputation
@@ -234,7 +286,7 @@ object SummaryGenerator extends Serializable {
       row("KPIS", "Total rows REF",      "ROWS", counts.totalRowsRef, 0, "" ),
       row("KPIS", "Total rows NEW",      "ROWS", counts.totalRowsNew, 0, "" ),
       row("KPIS", "Total diff(new-ref)", "ROWS", counts.totalRowsNew - counts.totalRowsRef, counts.totalRowsRef, "" ),
-      row("KPIS", "Global quality",      "REF",  counts.qualityOk,   counts.nRefIds, ""),
+      row("KPIS", "Global quality",      "BOTH", counts.qualityOk,   counts.nBothIds, ""),
 
       row("EXACT MATCH",   "1:1 (all columns)",           "BOTH", idsExactCount,      counts.nBothIds, idsToStr(sets.idsExact)),
       row("PARTIAL MATCH", "1:1 (match & no_match cols)", "BOTH", idsVariationsCount, counts.nBothIds, idsToStr(sets.idsVariations)),

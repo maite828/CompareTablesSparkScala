@@ -1,9 +1,6 @@
-
-
+import org.apache.spark.internal.Logging
 
 import java.time.LocalDate
-
-import org.apache.spark.internal.Logging
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.storage.StorageLevel
@@ -227,8 +224,8 @@ object TableComparisonController extends Logging {
 
     // Decidir spec por lado (precedencia: override > global)
     val refSpec = refPartitionSpecOverride.orElse(partitionSpec)
-    
-    // Para newSpec, si hay mapeo, debemos "des-mapear" las columnas de partición 
+
+    // Para newSpec, si hay mapeo, debemos "des-mapear" las columnas de partición
     // (usar el nombre físico en newTable en lugar del nombre lógico de refTable)
     val rawNewSpec = newPartitionSpecOverride.orElse(partitionSpec)
     val newSpec = rawNewSpec.map { spec =>
@@ -355,10 +352,16 @@ object TableComparisonController extends Logging {
       .select(columns.map(col): _*)
       .withColumn("initiative", lit(initiative))
       .withColumn("data_date_part", lit(executionDate))
-      .coalesce(1) // keep a small number of files per partition for result tables
 
-    logInfo(s"[DEBUG] writeResult: insertInto($tableName)")
-    out.write.mode(SaveMode.Overwrite).insertInto(tableName)
+    logInfo(s"[DEBUG] writeResult: insertInto($tableName) with maxRecordsPerFile=${ComparatorDefaults.MaxRecordsPerFile} (~128MB per file)")
+
+    // Control output file size to prevent huge partition files (e.g., >1GB)
+    // Target: ~128MB per file (671K rows assuming 200 bytes/row average)
+    // Works in Databricks shared clusters where we can't modify global Spark config
+    out.write
+      .option("maxRecordsPerFile", ComparatorDefaults.MaxRecordsPerFile)
+      .mode(SaveMode.Overwrite)
+      .insertInto(tableName)
   }
 
   // ─────────────────────────── Source enforcement ───────────────────────────
@@ -375,6 +378,7 @@ object TableComparisonController extends Logging {
     val convParquet = spark.conf.get("spark.sql.hive.convertMetastoreParquet")
     val convOrc     = spark.conf.get("spark.sql.hive.convertMetastoreOrc")
     logInfo(s"[CONF] convertMetastoreParquet=$convParquet, convertMetastoreOrc=$convOrc")
+    logInfo(s"[CONF] Output file size control: maxRecordsPerFile=${ComparatorDefaults.MaxRecordsPerFile} (~128MB per file)")
   }
 
   /**

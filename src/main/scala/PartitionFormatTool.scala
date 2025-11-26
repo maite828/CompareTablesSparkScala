@@ -1,8 +1,7 @@
-// src/main/scala/PartitionFormatTool.scala
-// (no package to match your current project layout)
-
+import ComparatorDefaults.{DayMax, DayMin, MonthMax, MonthMin, YearMax, YearMin}
 import com.fasterxml.jackson.databind.node.{ArrayNode, ObjectNode, TextNode}
 import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
+
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -74,7 +73,7 @@ object PartitionFormatTool {
     mapper.readTree(json)
 
   /** Replace date tokens, placeholders (YYYY/MM/dd, dd-MM-YYYY, yyyyMMdd, …)
-    *  and date-like substrings in a string, keeping the intended format. */
+   *  and date-like substrings in a string, keeping the intended format. */
   private def replaceDateInString(s: String, execDate: LocalDate): String = {
     def fmt(p: String) = DateTimeFormatter.ofPattern(p, Locale.ROOT)
 
@@ -182,10 +181,10 @@ object PartitionFormatTool {
   }
 
   /** Normalize parameters:
-    *  - Requires executionDate (ISO yyyy-MM-dd).
-    *  - Rewrites strings (tokens/placeholders/fechas reales) across the tree.
-    *  - Returns (normalizedParams, normalizedPartitionSpec).
-    */
+   *  - Requires executionDate (ISO yyyy-MM-dd).
+   *  - Rewrites strings (tokens/placeholders/fechas reales) across the tree.
+   *  - Returns (normalizedParams, normalizedPartitionSpec).
+   */
   def normalizeParameters(paramsNode: JsonNode, executionDateISO: String): (JsonNode, Option[String]) = {
     val execDate   = LocalDate.parse(executionDateISO, ISO)
     val normalized = rewriteDatesDeep(paramsNode, execDate)
@@ -204,25 +203,25 @@ object PartitionFormatTool {
   }
 
   /** Extract yyyy-MM-dd from a partitionSpec.
-    * Supports:
-    *  - key="2025-08-14" (ISO quoted)
-    *  - bare 2025-08-14 anywhere (ISO)
-    *  - key="14/08/2025" (DMY quoted)  -> converted to ISO
-    *  - bare 14/08/2025 anywhere (DMY) -> converted to ISO
-    *  - three numeric tokens (2/4 digits) in any order (e.g., year/month/day or month/year/day)
-    * If not found, returns today's date in ISO.
-    */
+   * Supports:
+   *  - key="2025-08-14" (ISO quoted)
+   *  - bare 2025-08-14 anywhere (ISO)
+   *  - key="14/08/2025" (DMY quoted)  -> converted to ISO
+   *  - bare 14/08/2025 anywhere (DMY) -> converted to ISO
+   *  - three numeric tokens (2/4 digits) in any order (e.g., year/month/day or month/year/day)
+   * If not found, returns today's date in ISO.
+   */
   def extractDateFromPartitionSpec(partitionSpec: Option[String]): String = {
     def fromTripleTokens(tokens: List[String]): Option[String] = {
       val (four, rest) = tokens.partition(_.length == 4)
-      val yearOpt = four.map(_.toInt).find(y => y >= 1900 && y <= 2100)
+      val yearOpt = four.map(_.toInt).find(y => y >= YearMin && y <= YearMax)
         .orElse(four.headOption.map(_.toInt))
       val twos = rest.filter(_.length == 2).map(_.toInt)
 
       (yearOpt, twos) match {
         case (Some(y), m1 :: d1 :: _) =>
           def fmt(y: Int, m: Int, d: Int): Option[String] =
-            if (m >= 1 && m <= 12 && d >= 1 && d <= 31) Some(f"$y-$m%02d-$d%02d") else None
+            if (m >= MonthMin && m <= MonthMax && d >= DayMin && d <= DayMax) Some(f"$y-$m%02d-$d%02d") else None
           // Try month=m1/day=d1, then swap if invalid
           fmt(y, m1, d1).orElse(fmt(y, d1, m1))
         case _ => None
