@@ -1,4 +1,3 @@
-
 import ComparatorDefaults.SampleIdsForSummary
 import org.apache.spark.sql.{Column, DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
@@ -101,7 +100,16 @@ object SummaryGenerator extends Serializable {
       )
 
       val rows = buildRows(counts, sets, preCounts)(in.spark)
+      // Preserve logical order: KPIS → EXACT → PARTIAL → GAP → DUPS
+      val blockOrder = when(col("block") === "KPIS", lit(1))
+        .when(col("block") === "EXACT MATCH", lit(2))
+        .when(col("block") === "PARTIAL MATCH", lit(3))
+        .when(col("block") === "GAP", lit(4))
+        .when(col("block") === "DUPS", lit(5))
+        .otherwise(lit(6))
+
       in.spark.createDataset(rows).toDF()
+        .orderBy(blockOrder, col("metric"), col("universe"))
     } finally {
       // Always release temporary caches and IdSets
       cacheThese.foreach(df => df.unpersist(blocking = true))
