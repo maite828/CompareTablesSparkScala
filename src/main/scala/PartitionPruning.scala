@@ -23,20 +23,21 @@ object PartitionPruning {
     val spec   = partitionSpec.map(_.trim).getOrElse("")
 
     if (spec.isEmpty) {
-      println(s"[DEBUG] loadWithPartition: $tableName without spec -> no filter")
+      println(s"[DEBUG] loadWithPartition: $tableName without spec -> no filter | hasData=${!baseDf.isEmpty}")
       baseDf
     } else {
       // Parse the spec into a map of partition_column -> values
       val specMap = parsePartitionSpecToMap(spec)
-      
+
       // Resolve wildcards: if any column has wildcard (*), resolve available values from metastore
       val resolvedMap = resolveWildcards(spark, tableName, specMap)
-      
+
       // Build filter predicates from resolved map
       val filter = buildFilterFromMap(resolvedMap)
-      
-      println(s"[DEBUG] loadWithPartition: $tableName with filter: ${filter}")
-      baseDf.where(filter)
+
+      val filtered = baseDf.where(filter)
+      println(s"[DEBUG] loadWithPartition: $tableName with filter: $filter | hasData=${!filtered.isEmpty}")
+      filtered
     }
   }
 
@@ -50,19 +51,19 @@ object PartitionPruning {
                                 tableName: String,
                                 specMap: Map[String, Values]
                               ): Map[String, Values] = {
-    
+
     // Find columns with wildcards
     val wildcardCols = specMap.filter { case (_, vals) => vals.isWildcard }.keys.toSeq
-    
+
     if (wildcardCols.isEmpty) {
       // No wildcards to resolve, return as-is
       specMap
     } else {
       // Resolve wildcards by querying SHOW PARTITIONS
       println(s"[DEBUG] Resolving wildcards for columns: ${wildcardCols.mkString(", ")}")
-      
+
       val resolvedValues = resolveWildcardColumns(spark, tableName, wildcardCols, specMap)
-      
+
       // Merge resolved values back into specMap
       specMap.map { case (col, vals) =>
         if (vals.isWildcard && resolvedValues.contains(col)) {
@@ -89,10 +90,10 @@ object PartitionPruning {
       val allPartitions: Array[String] = spark.sql(s"SHOW PARTITIONS $tableName")
         .collect()
         .map(_.getString(0))
-      
+
       // Parse each partition string into a map: "col1=val1/col2=val2" -> Map(col1->val1, col2->val2)
       val parsedPartitions = allPartitions.map(parsePartitionString)
-      
+
       // Filter partitions by non-wildcard constraints
       val filteredPartitions = parsedPartitions.filter { partMap =>
         specMap.forall { case (col, vals) =>
@@ -105,16 +106,16 @@ object PartitionPruning {
           }
         }
       }
-      
+
       // Extract distinct values for each wildcard column
       val resolved = wildcardCols.map { col =>
         val distinctVals = filteredPartitions.flatMap(_.get(col)).distinct.sorted
         println(s"[DEBUG] Resolved wildcard column '$col': ${distinctVals.length} values -> ${distinctVals.take(10).mkString(", ")}${if (distinctVals.length > 10) "..." else ""}")
         col -> distinctVals.toSeq
       }.toMap
-      
+
       resolved
-      
+
     } catch {
       case ex: Throwable =>
         println(s"[WARN] Failed to resolve wildcards via SHOW PARTITIONS: ${ex.getMessage}")
@@ -149,7 +150,7 @@ object PartitionPruning {
         Some(col(colName).isin(vals.values: _*))
       }
     }
-    
+
     if (filters.isEmpty) {
       lit(true) // No filter
     } else {

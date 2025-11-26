@@ -353,8 +353,7 @@ object TableComparisonController extends Logging {
       .withColumn("initiative", lit(initiative))
       .withColumn("data_date_part", lit(executionDate))
 
-    logInfo(s"[DEBUG] writeResult: insertInto($tableName) with maxRecordsPerFile=${ComparatorDefaults.MaxRecordsPerFile} (~128MB per file)")
-
+    logInfo(s"[DEBUG] writeResult: insertInto($tableName) | hasData=${!out.isEmpty}")
     // Control output file size to prevent huge partition files (e.g., >1GB)
     // Target: ~128MB per file (671K rows assuming 200 bytes/row average)
     // Works in Databricks shared clusters where we can't modify global Spark config
