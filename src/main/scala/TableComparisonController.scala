@@ -102,10 +102,8 @@ object TableComparisonController extends Logging {
     Option(configuredISO).map(_.trim).filter(_.nonEmpty).getOrElse(extractExecutionDate(partitionSpec))
 
   private def extractExecutionDate(partitionSpec: Option[String]): String = {
-    val isoRx =
-      "[A-Za-z0-9_]+\\s*=\\s*\\\"([0-9]{4}-[0-9]{2}-[0-9]{2})\\\"".r
-    val tripleRx =
-      "[A-Za-z0-9_]+\\s*=\\s*\\\"([0-9]{2})\\\"\\s*/\\s*[A-Za-z0-9_]+\\s*=\\s*\\\"([0-9]{2})\\\"\\s*/\\s*[A-Za-z0-9_]+\\s*=\\s*\\\"([0-9]{4})\\\"".r
+    val isoRx = """[A-Za-z0-9_]+\s*=\s*"([0-9]{4}-[0-9]{2}-[0-9]{2})"""".r
+    val tripleRx = """[A-Za-z0-9_]+\s*=\s*"([0-9]{2})"\s*/\s*[A-Za-z0-9_]+\s*=\s*"([0-9]{2})"\s*/\s*[A-Za-z0-9_]+\s*=\s*"([0-9]{4})"""".r
     partitionSpec
       .flatMap { spec =>
         isoRx.findFirstMatchIn(spec).map(_.group(1))
@@ -306,7 +304,7 @@ object TableComparisonController extends Logging {
   // Apply an optional SQL filter clause to a DF, logging the expression.
   // PERF OPTIMIZATION: Removed expensive count() operations (2 full scans eliminated)
   // Use Spark UI → SQL tab to monitor actual row counts if needed
-  private def applyOptionalFilter(df: DataFrame, filterExprOpt: Option[String], label: String): DataFrame =
+  def applyOptionalFilter(df: DataFrame, filterExprOpt: Option[String], label: String): DataFrame =
     filterExprOpt match {
       case Some(expr) if expr.nonEmpty =>
         val filtered = df.filter(expr)

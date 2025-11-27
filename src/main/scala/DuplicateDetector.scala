@@ -1,9 +1,8 @@
-
-import ComparatorDefaults.{HashNullToken, HashSeparator, MinOccurrencesToBeDuplicate, Sha256Bits}
 import org.apache.spark.sql.{Column, DataFrame, Encoders, SparkSession}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.StringType
+import ComparatorDefaults.{HashNullToken, HashSeparator, Sha256Bits, MinOccurrencesToBeDuplicate}
 
 case class DuplicateOut(
                          origin: String,                // "ref" | "new"
@@ -81,8 +80,10 @@ object DuplicateDetector {
       val existingPriorityCols = config.priorityCols.filter(df.columns.contains)
 
       if (existingPriorityCols.nonEmpty) {
-        // Partition by ALL columns except priorityCols (and _rn which we'll add)
-        val partitionCols = df.columns.filterNot(config.priorityCols.contains)
+        // Partition by ALL columns except priorityCols
+        // Explicitly exclude _rn to avoid including it if it exists temporarily
+        val excludeFromPartition = config.priorityCols.toSet + "_rn"
+        val partitionCols = df.columns.filterNot(excludeFromPartition.contains)
 
         // Order by priorityCols in order (first has highest precedence)
         val orderCols = existingPriorityCols.map(col(_).desc_nulls_last)
