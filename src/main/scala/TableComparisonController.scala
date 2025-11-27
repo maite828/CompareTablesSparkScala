@@ -332,6 +332,38 @@ object TableComparisonController extends Logging {
   }
 
   // ─────────────────────────── Write helpers ───────────────────────────
+
+  /**
+   * Calculates optimal number of partitions for writing output files.
+   * Uses conservative limits: prefers fewer, larger files over many small files.
+   */
+  private def calculateOptimalWritePartitions(
+                                               df: DataFrame,
+                                               targetSizeMB: Int = 128,
+                                               minPartitions: Int = 1,
+                                               maxPartitions: Int = 20
+                                             ): Int = {
+    try {
+      val sizeBytes = df.queryExecution.optimizedPlan.stats.sizeInBytes
+
+      if (sizeBytes.isValidLong && sizeBytes.longValue > 0) {
+        val sizeMB = sizeBytes.longValue.toDouble / (1024 * 1024)
+        val calculated = Math.ceil(sizeMB / targetSizeMB).toInt
+        val bounded = Math.max(minPartitions, Math.min(maxPartitions, calculated))
+
+        logInfo(s"[DEBUG] Estimated data size: ${sizeMB.toInt}MB → $bounded partitions (target: ${targetSizeMB}MB/file)")
+        bounded
+      } else {
+        logWarn(s"[WARN] Invalid size estimation, using minPartitions=$minPartitions")
+        minPartitions
+      }
+    } catch {
+      case e: Exception =>
+        logWarn(s"[WARN] Error calculating partitions: ${e.getMessage}, using minPartitions=$minPartitions")
+        minPartitions
+    }
+  }
+
   private def writeResult(
                            tableName: String,
                            df: DataFrame,
@@ -355,9 +387,19 @@ object TableComparisonController extends Logging {
 
     logInfo(s"[DEBUG] writeResult: insertInto($tableName) | hasData=${!out.isEmpty}")
 
-    // Control output file size by actual data size (not row count)
-    // Only splits files when they exceed 128MB of actual data
-    out.write
+    // Optimize output file count based on estimated data size (robust calculation)
+    val targetPartitions = calculateOptimalWritePartitions(out, targetSizeMB = 128, minPartitions = 1, maxPartitions = 20)
+    val currentPartitions = out.rdd.getNumPartitions
+
+    val optimized = if (currentPartitions > targetPartitions) {
+      logInfo(s"[DEBUG] Coalescing from $currentPartitions to $targetPartitions partitions for optimal file size")
+      out.coalesce(targetPartitions)
+    } else {
+      logInfo(s"[DEBUG] Keeping $currentPartitions partitions (already optimal)")
+      out
+    }
+
+    optimized.write
       .mode(SaveMode.Overwrite)
       .insertInto(tableName)
   }
@@ -373,11 +415,7 @@ object TableComparisonController extends Logging {
     spark.conf.set("hive.exec.dynamic.partition", "true")
     spark.conf.set("hive.exec.dynamic.partition.mode", "nonstrict")
 
-    // Control output file size by actual data size (only splits when >128MB)
-    spark.conf.set("spark.sql.files.maxPartitionBytes", ComparatorDefaults.MaxPartitionBytes.toString)
-
-    val maxPartitionMB = ComparatorDefaults.MaxPartitionBytes / (1024 * 1024)
-    logInfo(s"[CONF] Output file size control: maxPartitionBytes=${maxPartitionMB}MB (splits only when data exceeds this size)")
+    logInfo(s"[CONF] File consolidation: Using adaptive coalesce to reduce small file count")
   }
 
   /**
