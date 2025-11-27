@@ -1,7 +1,7 @@
-
 import org.apache.spark.sql.SparkSession
-import java.time.LocalDate
+
 import java.io.File
+import java.time.LocalDate
 
 // Supported aggregation types for overrides
 sealed trait AggType
@@ -44,5 +44,8 @@ final case class CompareConfig(
                                 newFilter: Option[String] = None,
 
                                 // NEW: Column mapping (refName -> newName) to rename columns in NEW table before comparison
-                                columnMapping: Map[String, String] = Map.empty
+                                columnMapping: Map[String, String] = Map.empty,
+
+                                // NEW: Opt-in to enable dynamic partitioning for large datasets. Default is false (always 1 file).
+                                enableDynamicPartitioning: Boolean = false
                               )

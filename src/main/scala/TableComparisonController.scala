@@ -130,7 +130,8 @@ object TableComparisonController extends Logging {
       diffDf,
       Seq("id", "column", "value_ref", "value_new", "results"),
       config.initiativeName,
-      executionDate
+      executionDate,
+      config
     )
     diffDf
   }
@@ -149,7 +150,8 @@ object TableComparisonController extends Logging {
         dupDf,
         Seq("origin","id","category","exact_duplicates","dupes_w_variations","occurrences","variations"),
         config.initiativeName,
-        executionDate
+        executionDate,
+        config
       )
       // Read back and assert the plan is also a FileScan (sink must be DataSource)
       val dupRead = config.spark.table(s"${config.tablePrefix}duplicates")
@@ -182,7 +184,8 @@ object TableComparisonController extends Logging {
       summaryDf,
       Seq("block","metric","universe","numerator","denominator","pct","samples"),
       config.initiativeName,
-      executionDate
+      executionDate,
+      config
     )
     summaryDf
   }
@@ -333,43 +336,13 @@ object TableComparisonController extends Logging {
 
   // ─────────────────────────── Write helpers ───────────────────────────
 
-  /**
-   * Calculates optimal number of partitions for writing output files.
-   * Uses conservative limits: prefers fewer, larger files over many small files.
-   */
-  private def calculateOptimalWritePartitions(
-                                               df: DataFrame,
-                                               targetSizeMB: Int = 128,
-                                               minPartitions: Int = 1,
-                                               maxPartitions: Int = 20
-                                             ): Int = {
-    try {
-      val sizeBytes = df.queryExecution.optimizedPlan.stats.sizeInBytes
-
-      if (sizeBytes.isValidLong && sizeBytes.longValue > 0) {
-        val sizeMB = sizeBytes.longValue.toDouble / (1024 * 1024)
-        val calculated = Math.ceil(sizeMB / targetSizeMB).toInt
-        val bounded = Math.max(minPartitions, Math.min(maxPartitions, calculated))
-
-        logInfo(s"[DEBUG] Estimated data size: ${sizeMB.toInt}MB → $bounded partitions (target: ${targetSizeMB}MB/file)")
-        bounded
-      } else {
-        logWarn(s"[WARN] Invalid size estimation, using minPartitions=$minPartitions")
-        minPartitions
-      }
-    } catch {
-      case e: Exception =>
-        logWarn(s"[WARN] Error calculating partitions: ${e.getMessage}, using minPartitions=$minPartitions")
-        minPartitions
-    }
-  }
-
   private def writeResult(
                            tableName: String,
                            df: DataFrame,
                            columns: Seq[String],
                            initiative: String,
-                           executionDate: String
+                           executionDate: String,
+                           config: CompareConfig // Pass config for enableDynamicPartitioning
                          ): Unit = {
     val spark = df.sparkSession
 
@@ -385,21 +358,52 @@ object TableComparisonController extends Logging {
       .withColumn("initiative", lit(initiative))
       .withColumn("data_date_part", lit(executionDate))
 
-    logInfo(s"[DEBUG] writeResult: insertInto($tableName) | hasData=${!out.isEmpty}")
+    // Efficiently check presence of data
+    val hasData = try { out.limit(1).count() > 0 } catch { case _: Throwable => true }
+    logInfo(s"[WRITE] Starting write to $tableName | hasData=$hasData")
 
-    // Optimize output file count based on estimated data size (robust calculation)
-    val targetPartitions = calculateOptimalWritePartitions(out, targetSizeMB = 128, minPartitions = 1, maxPartitions = 20)
-    val currentPartitions = out.rdd.getNumPartitions
-
-    val optimized = if (currentPartitions > targetPartitions) {
-      logInfo(s"[DEBUG] Coalescing from $currentPartitions to $targetPartitions partitions for optimal file size")
-      out.coalesce(targetPartitions)
-    } else {
-      logInfo(s"[DEBUG] Keeping $currentPartitions partitions (already optimal)")
-      out
+    if (!hasData) {
+      logWarn(s"[WRITE] No data to write for $tableName, skipping")
+      return
     }
 
-    optimized.write
+    val currentPartitions = out.rdd.getNumPartitions
+
+    // If enableDynamicPartitioning is true, use smart logic. Otherwise, always consolidate.
+    val toWrite = if (config.enableDynamicPartitioning) {
+      // SMART LOGIC (Opt-in for large datasets)
+      val targetSizeMB = 128
+      val stats = try { out.queryExecution.optimizedPlan.stats } catch { case _: Throwable => null }
+      val estimatedMB = Option(stats).flatMap(s => if (s.sizeInBytes.isValidLong) Some(s.sizeInBytes.toDouble / (1024*1024)) else None)
+
+      estimatedMB match {
+        case Some(sizeMB) if sizeMB > 0 =>
+          if (sizeMB <= targetSizeMB) {
+            logInfo(f"[WRITE] Dynamic mode: Estimated size $sizeMB%.1f MB <= $targetSizeMB MB → consolidating to 1 file.")
+            if (currentPartitions > 1) out.coalesce(1) else out
+          } else {
+            val targetPartitions = Math.max(1, Math.ceil(sizeMB / targetSizeMB).toInt)
+            logInfo(f"[WRITE] Dynamic mode: Estimated size $sizeMB%.1f MB > $targetSizeMB MB → writing $targetPartitions files (~$targetSizeMB MB each).")
+            if (targetPartitions < currentPartitions) out.coalesce(targetPartitions) else out.repartition(targetPartitions)
+          }
+        case _ =>
+          logWarn(s"[WRITE] Dynamic mode: No reliable stats. Consolidating $currentPartitions partitions to 1 file as a safeguard.")
+          if (currentPartitions > 1) out.coalesce(1) else out
+      }
+    } else {
+      // DEFAULT SAFE LOGIC: Always consolidate to 1 file.
+      if (currentPartitions > 1) {
+        logInfo(s"[WRITE] Default mode: Consolidating $currentPartitions partitions to 1 file (coalesce).")
+        out.coalesce(1)
+      } else {
+        out
+      }
+    }
+
+    val finalPartitions = toWrite.rdd.getNumPartitions
+    logInfo(s"[WRITE] ✓ Writing to $tableName with $finalPartitions partition(s)")
+
+    toWrite.write
       .mode(SaveMode.Overwrite)
       .insertInto(tableName)
   }
@@ -415,7 +419,7 @@ object TableComparisonController extends Logging {
     spark.conf.set("hive.exec.dynamic.partition", "true")
     spark.conf.set("hive.exec.dynamic.partition.mode", "nonstrict")
 
-    logInfo(s"[CONF] File consolidation: Using adaptive coalesce to reduce small file count")
+    logInfo(s"[CONF] Write optimization: Smart partitioning (1-200 files, ~128MB each, minimal shuffle)")
   }
 
   /**

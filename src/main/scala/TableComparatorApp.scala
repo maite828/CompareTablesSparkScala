@@ -1,4 +1,3 @@
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 
@@ -8,7 +7,6 @@ class TableComparatorApp()(implicit spark: SparkSession) extends Logging {
 
   // ─────────────────────────── log + println (double logging) ───────────────────────────
   private def info(msg: String): Unit = { log.info(msg); println(msg) }
-  private def warn(msg: String): Unit = { log.warn(msg); println(msg) }
   private def err (msg: String): Unit = { log.error(msg); println(msg) }
 
   // ---------------------------- KV helpers ----------------------------
@@ -110,6 +108,7 @@ class TableComparatorApp()(implicit spark: SparkSession) extends Logging {
     val ignoreCols = csvToSeq(kv.getOrElse("ignoreCols", ""))
 
     val (checkDuplicates, includeEquals) = parseBooleans(kv)
+    val enableDynamicPart = kv.get("enableDynamicPartitioning").exists(_.trim.equalsIgnoreCase("true"))
 
     val rawSpecOpt = kv.get("partitionSpec")
     val partitionSpec = normalizePartitionSpec(rawSpecOpt, executionDate)
@@ -187,7 +186,8 @@ class TableComparatorApp()(implicit spark: SparkSession) extends Logging {
       newFilter = newFilter,
       columnMapping = kv.collect {
         case (k, v) if k.startsWith("colMap.") => k.stripPrefix("colMap.") -> v
-      }
+      },
+      enableDynamicPartitioning = enableDynamicPart
     )
   }
 
@@ -212,31 +212,6 @@ class TableComparatorApp()(implicit spark: SparkSession) extends Logging {
     // showComparisonResults(spark, cfg.tablePrefix, cfg.initiativeName, cfg.outputDateISO)
     info(s"[DEBUG] execDateForFilter: ${cfg.outputDateISO}")
     info("[Driver] KV-mode comparison finished.")
-  }
-
-  // helper for manual inspection On demand test
-  private def showComparisonResults(
-                                     spark: SparkSession,
-                                     prefix: String,
-                                     initiative: String,
-                                     datePart: String
-                                   ): Unit = {
-    def q(table: String) =
-      s"""
-         |SELECT *
-         |FROM $table
-         |WHERE initiative = '$initiative'
-         |  AND data_date_part = '$datePart'
-         |""".stripMargin
-
-    info(s"\n-- Differences (${prefix}differences) --")
-    spark.sql(q(prefix + "differences")).show(false)
-
-    info(s"\n-- Summary (${prefix}summary) --")
-    spark.sql(q(prefix + "summary")).show(false)
-
-    info(s"\n-- Duplicates (${prefix}duplicates) --")
-    spark.sql(q(prefix + "duplicates")).show(false)
   }
 }
 
