@@ -198,6 +198,7 @@ object SummaryGenerator extends Serializable {
     val oNew = dupIds.filter($"category" === "only_new").select($"cid").distinct()
     val any  = dRef.union(dNew).distinct()
 
+
     DupSets(both, oRef, oNew, any)
   }
 

@@ -153,6 +153,7 @@ object TableComparisonController extends Logging {
       )
       // Read back and assert the plan is also a FileScan (sink must be DataSource)
       val dupRead = config.spark.table(s"${config.tablePrefix}duplicates")
+        .filter(col("initiative") === config.initiativeName && col("data_date_part") === executionDate)
       assertFileSource(dupRead, s"[sink-read] ${config.tablePrefix}duplicates")
       dupRead
     } else {
@@ -316,7 +317,7 @@ object TableComparisonController extends Logging {
 
   // NEW: Rename columns in NEW table based on mapping (refName -> newName)
   // We want NEW table to have REF names. So if mapping is "id" -> "id_v2", we rename "id_v2" to "id".
-  def applyColumnMapping(df: DataFrame, mapping: Map[String, String]): DataFrame = {
+  private def applyColumnMapping(df: DataFrame, mapping: Map[String, String]): DataFrame = {
     if (mapping.isEmpty) df
     else {
       logInfo(s"[MAPPING] Applying column mapping: ${mapping.mkString(", ")}")
