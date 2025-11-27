@@ -5,7 +5,7 @@ object ComparatorDefaults {
   final val ShufflePartitionsDefault    = 100
   final val FileOutputCommitterAlgV2    = 2
   final val Sha256Bits                  = 256
-  final val MaxRecordsPerFile           = 671088    // ~128MB target per output file
+  final val MaxPartitionBytes           = 134217728L // 128MB in bytes (controls output file size by actual data size)
 
   // Límites de logging / muestreo
   final val MaxOrderMismatchesToLog     = 50

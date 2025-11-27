@@ -354,11 +354,10 @@ object TableComparisonController extends Logging {
       .withColumn("data_date_part", lit(executionDate))
 
     logInfo(s"[DEBUG] writeResult: insertInto($tableName) | hasData=${!out.isEmpty}")
-    // Control output file size to prevent huge partition files (e.g., >1GB)
-    // Target: ~128MB per file (671K rows assuming 200 bytes/row average)
-    // Works in Databricks shared clusters where we can't modify global Spark config
+
+    // Control output file size by actual data size (not row count)
+    // Only splits files when they exceed 128MB of actual data
     out.write
-      .option("maxRecordsPerFile", ComparatorDefaults.MaxRecordsPerFile)
       .mode(SaveMode.Overwrite)
       .insertInto(tableName)
   }
@@ -374,10 +373,11 @@ object TableComparisonController extends Logging {
     spark.conf.set("hive.exec.dynamic.partition", "true")
     spark.conf.set("hive.exec.dynamic.partition.mode", "nonstrict")
 
-    val convParquet = spark.conf.get("spark.sql.hive.convertMetastoreParquet")
-    val convOrc     = spark.conf.get("spark.sql.hive.convertMetastoreOrc")
-    logInfo(s"[CONF] convertMetastoreParquet=$convParquet, convertMetastoreOrc=$convOrc")
-    logInfo(s"[CONF] Output file size control: maxRecordsPerFile=${ComparatorDefaults.MaxRecordsPerFile} (~128MB per file)")
+    // Control output file size by actual data size (only splits when >128MB)
+    spark.conf.set("spark.sql.files.maxPartitionBytes", ComparatorDefaults.MaxPartitionBytes.toString)
+
+    val maxPartitionMB = ComparatorDefaults.MaxPartitionBytes / (1024 * 1024)
+    logInfo(s"[CONF] Output file size control: maxPartitionBytes=${maxPartitionMB}MB (splits only when data exceeds this size)")
   }
 
   /**
