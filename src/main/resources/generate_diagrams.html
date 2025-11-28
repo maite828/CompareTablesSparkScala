@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AML Tools - Generador de Diagramas</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 10px;
+            margin-bottom: 30px;
+        }
+        .diagram-container {
+            background: white;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .diagram-title {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #667eea;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        .diagram-description {
+            color: #666;
+            margin-bottom: 15px;
+            font-style: italic;
+        }
+        .mermaid {
+            background: white;
+            padding: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 5px;
+            margin: 15px 0;
+        }
+        .download-btn {
+            background: #667eea;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-top: 10px;
+            transition: background 0.3s;
+        }
+        .download-btn:hover {
+            background: #764ba2;
+        }
+        .instructions {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+        .instructions h2 {
+            margin-top: 0;
+            color: #856404;
+        }
+        .instructions ol {
+            margin: 10px 0;
+        }
+        .instructions li {
+            margin: 8px 0;
+        }
+        .download-all {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #28a745;
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 1000;
+            transition: all 0.3s;
+        }
+        .download-all:hover {
+            background: #218838;
+            transform: scale(1.05);
+        }
+    </style>
+</head>
+<body>
+    <h1>🎨 AML Internal Tools - Generador de Diagramas para Confluence</h1>
+
+    <div class="instructions">
+        <h2>📋 Instrucciones de Uso:</h2>
+        <ol>
+            <li><strong>Espera 5 segundos</strong> a que todos los diagramas se rendericen en la página</li>
+            <li><strong>Clic derecho</strong> sobre cada diagrama → "Guardar imagen como..." → Guardar como PNG</li>
+            <li>O usa el <strong>botón verde</strong> flotante abajo a la derecha para descargar todos a la vez</li>
+            <li><strong>Sube las imágenes</strong> a Confluence en el orden que aparecen aquí</li>
+            <li><strong>Añade el título</strong> de cada diagrama como encabezado en Confluence</li>
+        </ol>
+        <p><strong>💡 Tip:</strong> Los nombres de archivo incluyen el número para mantener el orden correcto.</p>
+    </div>
+
+    <!-- DIAGRAMA 1: Flujo Principal -->
+    <div class="diagram-container">
+        <div class="diagram-title">1. Flujo Principal de Ejecución</div>
+        <div class="diagram-description">Muestra el flujo completo desde spark-submit hasta la generación de resultados</div>
+        <div class="mermaid" id="diagram1">
+graph TD
+    A[Inicio - spark-submit] --> B[TableComparatorApp.main]
+    B --> C[Parse KV Arguments]
+    C --> D[Build CompareConfig]
+    D --> E[TableComparisonController.run]
+
+    E --> F[Load & Prepare Data]
+    F --> F1[Load REF Table]
+    F --> F2[Load NEW Table]
+    F --> F3[Apply Filters]
+    F --> F4[Repartition 8-256 partitions]
+
+    F1 & F2 & F3 & F4 --> G[Compute Differences]
+    G --> H[Write differences Table]
+
+    H --> I{checkDuplicates?}
+    I -->|Yes| J[Compute Duplicates]
+    I -->|No| K[Empty DataFrame]
+
+    J --> L[Write duplicates Table]
+    L --> M[Read Back with Filter]
+    K --> M
+
+    M --> N[Compute Summary]
+    N --> O[Write summary Table]
+
+    O --> P[Cleanup & Unpersist]
+    P --> Q[Fin]
+
+    style A fill:#e1f5ff
+    style Q fill:#c8e6c9
+    style H fill:#fff9c4
+    style L fill:#fff9c4
+    style O fill:#fff9c4
+    style M fill:#ffccbc
+        </div>
+        <button class="download-btn" onclick="downloadDiagram('diagram1', '01_flujo_principal')">💾 Descargar PNG</button>
+    </div>
+
+    <!-- DIAGRAMA 2: Arquitectura de Componentes -->
+    <div class="diagram-container">
+        <div class="diagram-title">2. Arquitectura de Componentes</div>
+        <div class="diagram-description">Relación entre los componentes principales del sistema</div>
+        <div class="mermaid" id="diagram2">
+graph LR
+    subgraph "Entry Point"
+        A[TableComparatorApp]
+    end
+
+    subgraph "Orchestration"
+        B[TableComparisonController]
+    end
+
+    subgraph "Core Logic"
+        C1[ComparisonBuilders]
+        C2[DiffGenerator]
+        C3[DuplicateDetector]
+        C4[SummaryGenerator]
+    end
+
+    subgraph "Utilities"
+        D1[PrepUtils]
+        D2[PartitionPruning]
+        D3[SchemaChecker]
+        D4[TableIO]
+    end
+
+    subgraph "Output Tables"
+        F1[(differences)]
+        F2[(duplicates)]
+        F3[(summary)]
+    end
+
+    A --> B
+    B --> C1
+    C1 --> C2
+    C1 --> C3
+    B --> C4
+
+    B --> D1
+    B --> D2
+    B --> D3
+    B --> D4
+
+    C2 --> F1
+    C3 --> F2
+    C4 --> F3
+
+    style A fill:#e1f5ff
+    style B fill:#b3e5fc
+    style C1 fill:#c8e6c9
+    style C2 fill:#c8e6c9
+    style C3 fill:#c8e6c9
+    style C4 fill:#c8e6c9
+    style F1 fill:#fff9c4
+    style F2 fill:#fff9c4
+    style F3 fill:#fff9c4
+        </div>
+        <button class="download-btn" onclick="downloadDiagram('diagram2', '02_arquitectura_componentes')">💾 Descargar PNG</button>
+    </div>
+
+    <!-- DIAGRAMA 3: Proceso de Duplicados -->
+    <div class="diagram-container">
+        <div class="diagram-title">3. Proceso de Detección de Duplicados</div>
+        <div class="diagram-description">Flujo detallado de cómo se detectan y categorizan duplicados</div>
+        <div class="mermaid" id="diagram3">
+flowchart TD
+    A[Start: refDf + newDf] --> B[unionWithOrigin]
+    B --> C{priorityCols<br/>defined?}
+
+    C -->|Yes| D[applyPriorityIf]
+    C -->|No| E[No deduplication]
+
+    D --> F[Partition by ALL cols<br/>except priorityCols + _rn]
+    F --> G[Order by priorityCols DESC]
+    G --> H[Keep top-1 per group]
+
+    H --> I[withRowHash]
+    E --> I
+
+    I --> J[Compute SHA256 hash]
+
+    J --> K[aggregateByGroup]
+    K --> L[Group by _src + keys]
+
+    L --> M[Calculate metrics]
+
+    M --> N[computeCategories]
+    N --> O{ID in REF<br/>and NEW?}
+
+    O -->|Both| R[category = both]
+    O -->|Only REF| S[category = only_ref]
+    O -->|Only NEW| T[category = only_new]
+
+    R --> U[Write duplicates Table]
+    S --> U
+    T --> U
+
+    style A fill:#e1f5ff
+    style D fill:#ffccbc
+    style N fill:#fff9c4
+    style U fill:#c8e6c9
+        </div>
+        <button class="download-btn" onclick="downloadDiagram('diagram3', '03_proceso_duplicados')">💾 Descargar PNG</button>
+    </div>
+
+    <!-- DIAGRAMA 4: Estrategia de Particionamiento -->
+    <div class="diagram-container">
+        <div class="diagram-title">4. Estrategia de Particionamiento</div>
+        <div class="diagram-description">Decisión entre modo default (1 archivo) y modo dinámico (N archivos)</div>
+        <div class="mermaid" id="diagram4">
+graph TD
+    subgraph "Input Stage"
+        A[Raw Tables<br/>REF + NEW]
+    end
+
+    subgraph "Initial Partitioning"
+        B[PrepUtils]
+        B --> C{Cluster<br/>parallelism}
+        C --> D[base * 2]
+        D --> E[min=8 max=256]
+    end
+
+    subgraph "Processing"
+        F[Repartition by keys]
+        F --> G[Comparison Ops]
+        G --> H[Results<br/>8-256 partitions]
+    end
+
+    subgraph "Output Decision"
+        I{enableDynamic<br/>Partitioning?}
+    end
+
+    subgraph "Default SAFE"
+        J1[coalesce 1]
+        J1 --> J4[1 file per table]
+    end
+
+    subgraph "Dynamic LARGE"
+        K1[Estimate size]
+        K1 --> K2{size > 128MB?}
+        K2 -->|No| K3[coalesce 1]
+        K2 -->|Yes| K4[Calculate N files]
+        K4 --> K8[N files ~128MB each]
+    end
+
+    A --> B
+    E --> F
+    H --> I
+
+    I -->|false| J1
+    I -->|true| K1
+
+    J4 --> L[Write to Table]
+    K3 --> L
+    K8 --> L
+
+    style A fill:#e1f5ff
+    style E fill:#c8e6c9
+    style I fill:#ffccbc
+    style J4 fill:#fff9c4
+    style K8 fill:#fff9c4
+    style L fill:#c8e6c9
+        </div>
+        <button class="download-btn" onclick="downloadDiagram('diagram4', '04_estrategia_particionamiento')">💾 Descargar PNG</button>
+    </div>
+
+    <!-- DIAGRAMA 5: Interpretación Summary -->
+    <div class="diagram-container">
+        <div class="diagram-title">5. Interpretación de Summary Table</div>
+        <div class="diagram-description">Cómo interpretar los bloques del summary y la métrica Global Quality</div>
+        <div class="mermaid" id="diagram5">
+graph TB
+    subgraph "KPIS Block"
+        K1[Global Quality<br/>Métrica Principal]
+        K2[Total Rows]
+        K3[Unique IDs]
+    end
+
+    subgraph "EXACT MATCH"
+        E1[1:1 all columns<br/>Coincidencias]
+    end
+
+    subgraph "PARTIAL MATCH"
+        P1[1:1 with diffs<br/>Variaciones]
+    end
+
+    subgraph "GAP Block"
+        G1[1:0 only ref<br/>Falta en NEW]
+        G2[0:1 only new<br/>Falta en REF]
+    end
+
+    subgraph "DUPS Block"
+        D1[both<br/>En ambos]
+        D2[only ref<br/>Solo REF]
+        D3[only new<br/>Solo NEW]
+    end
+
+    K1 -.->|Deriva de| E1
+    K1 -.->|Excluye| D1
+    K1 -.->|Excluye| D2
+    K1 -.->|Excluye| D3
+
+    style K1 fill:#ffeb3b
+    style E1 fill:#c8e6c9
+    style P1 fill:#fff9c4
+    style G1 fill:#ffccbc
+    style G2 fill:#ffccbc
+    style D1 fill:#e1bee7
+        </div>
+        <button class="download-btn" onclick="downloadDiagram('diagram5', '05_interpretacion_summary')">💾 Descargar PNG</button>
+    </div>
+
+    <!-- DIAGRAMA 6: Troubleshooting -->
+    <div class="diagram-container">
+        <div class="diagram-title">6. Árbol de Decisión - Troubleshooting</div>
+        <div class="diagram-description">Guía rápida para diagnosticar y resolver problemas comunes</div>
+        <div class="mermaid" id="diagram6">
+graph TD
+    A[Problema] --> B{Tipo?}
+
+    B -->|Resultados<br/>Incorrectos| C1[Verificar dupRead<br/>tiene filtro]
+    B -->|Error<br/>Ejecución| D1[Verificar<br/>partitionSpec]
+    B -->|Lento| E1[Revisar<br/>particiones]
+
+    C1 --> C2{Filtro OK?}
+    C2 -->|No| C3[BUG: Agregar filtro]
+    C2 -->|Sí| C4[Verificar diffDf]
+
+    D1 --> D2[Verificar<br/>permisos S3]
+    D2 --> D3{HiveScan?}
+    D3 -->|Sí| D4[Recrear tabla<br/>USING parquet]
+
+    E1 --> E2{Tiempo?}
+    E2 -->|>1h| E3[Reducir ventana]
+    E2 -->|OK| E4[Normal]
+
+    style C3 fill:#ff6b6b
+    style D4 fill:#ffccbc
+    style E4 fill:#c8e6c9
+        </div>
+        <button class="download-btn" onclick="downloadDiagram('diagram6', '06_troubleshooting')">💾 Descargar PNG</button>
+    </div>
+
+    <!-- DIAGRAMA 7: Comparación Modos -->
+    <div class="diagram-container">
+        <div class="diagram-title">7. Comparación: Default vs Dinámico</div>
+        <div class="diagram-description">Diferencias entre enableDynamicPartitioning=false (default) y true</div>
+        <div class="mermaid" id="diagram7">
+graph TB
+    subgraph "Modo Default false"
+        A1[200 partitions] --> A2[Procesamiento<br/>8-256]
+        A2 --> A3[coalesce 1]
+        A3 --> A4[1 archivo]
+        A5[Simple<br/>Predecible<br/>99% casos]
+    end
+
+    subgraph "Modo Dinámico true"
+        B1[200 partitions] --> B2[Procesamiento<br/>8-256]
+        B2 --> B3[Estimación size]
+        B3 --> B4{size?}
+        B4 -->|<128MB| B5[coalesce 1]
+        B4 -->|>128MB| B6[coalesce N]
+        B5 --> B7[1 archivo]
+        B6 --> B8[N archivos<br/>~128MB cada]
+        B9[Rápido>500MB<br/>Requiere stats<br/>Casos especiales]
+    end
+
+    style A4 fill:#c8e6c9
+    style B7 fill:#c8e6c9
+    style B8 fill:#fff9c4
+        </div>
+        <button class="download-btn" onclick="downloadDiagram('diagram7', '07_comparacion_modos')">💾 Descargar PNG</button>
+    </div>
+
+    <!-- DIAGRAMA 8: Ejemplo Básico 3 Pasos -->
+    <div class="diagram-container">
+        <div class="diagram-title">8. Ejemplo Básico en 3 Pasos</div>
+        <div class="diagram-description">Guía rápida para ejecutar una comparación simple</div>
+        <div class="mermaid" id="diagram8">
+graph LR
+    subgraph "Paso 1"
+        A[Preparar Comando]
+        A --> A1[refTable]
+        A --> A2[newTable]
+        A --> A3[compositeKeyCols]
+        A --> A4[executionDate]
+    end
+
+    subgraph "Paso 2"
+        B[spark-submit]
+        B --> B1[Spark lee tablas]
+        B1 --> B2[Compara]
+        B2 --> B3[Genera resultados]
+    end
+
+    subgraph "Paso 3"
+        C[Query SQL]
+        C --> C1[SELECT FROM summary]
+        C1 --> C2[Revisar Quality]
+        C2 --> C3{>95%?}
+        C3 -->|Sí| D[OK]
+        C3 -->|No| E[Investigar]
+    end
+
+    A4 --> B
+    B3 --> C
+
+    style A fill:#e1f5ff
+    style B fill:#fff9c4
+    style D fill:#c8e6c9
+    style E fill:#ffccbc
+        </div>
+        <button class="download-btn" onclick="downloadDiagram('diagram8', '08_ejemplo_3_pasos')">💾 Descargar PNG</button>
+    </div>
+
+    <!-- DIAGRAMA 9: Estrategias de Filtrado -->
+    <div class="diagram-container">
+        <div class="diagram-title">9. Estrategias de Filtrado</div>
+        <div class="diagram-description">Combinación óptima de partitionSpec + refFilter para máximo rendimiento</div>
+        <div class="mermaid" id="diagram9">
+graph TB
+    A[Tabla 10TB] --> B[partitionSpec<br/>Filtro grueso]
+    B --> C[1TB<br/>100 particiones]
+
+    C --> D[refFilter<br/>Filtro fino SQL]
+    D --> E[100GB<br/>10 particiones]
+
+    E --> F[Comparison<br/>Eficiente]
+
+    style A fill:#ffcdd2
+    style C fill:#fff9c4
+    style E fill:#c8e6c9
+    style F fill:#c8e6c9
+        </div>
+        <button class="download-btn" onclick="downloadDiagram('diagram9', '09_estrategias_filtrado')">💾 Descargar PNG</button>
+    </div>
+
+    <!-- DIAGRAMA 10: priorityCols Comparación -->
+    <div class="diagram-container">
+        <div class="diagram-title">10. Impacto de priorityCols</div>
+        <div class="diagram-description">Diferencia entre usar o no usar priorityCols en detección de duplicados</div>
+        <div class="mermaid" id="diagram10">
+graph LR
+    subgraph "SIN priorityCols"
+        A1[ID=1 ts=10:00<br/>ID=1 ts=11:00<br/>ID=1 ts=12:00]
+        A1 --> A2[3 duplicados<br/>detectados]
+        A2 --> A3[occurrences=3]
+    end
+
+    subgraph "CON priorityCols=timestamp"
+        B1[ID=1 ts=10:00<br/>ID=1 ts=11:00<br/>ID=1 ts=12:00]
+        B1 --> B2[Mantiene<br/>ts=12:00]
+        B2 --> B3[1 fila única<br/>NO duplicado]
+    end
+
+    style A3 fill:#ffccbc
+    style B3 fill:#c8e6c9
+        </div>
+        <button class="download-btn" onclick="downloadDiagram('diagram10', '10_prioritycols_impacto')">💾 Descargar PNG</button>
+    </div>
+
+    <button class="download-all" onclick="downloadAllDiagrams()">📥 Descargar TODOS los diagramas</button>
+
+    <script>
+        // Inicializar Mermaid
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
+
+        // Función para descargar un diagrama individual
+        function downloadDiagram(diagramId, filename) {
+            const svg = document.querySelector(`#${diagramId} svg`);
+            if (!svg) {
+                alert('Diagrama no encontrado. Espera a que se renderice.');
+                return;
+            }
+
+            const svgData = new XMLSerializer().serializeToString(svg);
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+
+            // Obtener dimensiones del SVG
+            const bbox = svg.getBBox();
+            canvas.width = bbox.width + 40;
+            canvas.height = bbox.height + 40;
+
+            // Fondo blanco
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            img.onload = function() {
+                ctx.drawImage(img, 20, 20);
+                const pngUrl = canvas.toDataURL('image/png');
+                const downloadLink = document.createElement('a');
+                downloadLink.href = pngUrl;
+                downloadLink.download = `${filename}.png`;
+                downloadLink.click();
+            };
+
+            img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+        }
+
+        // Función para descargar todos los diagramas
+        function downloadAllDiagrams() {
+            const diagrams = [
+                {id: 'diagram1', name: '01_flujo_principal'},
+                {id: 'diagram2', name: '02_arquitectura_componentes'},
+                {id: 'diagram3', name: '03_proceso_duplicados'},
+                {id: 'diagram4', name: '04_estrategia_particionamiento'},
+                {id: 'diagram5', name: '05_interpretacion_summary'},
+                {id: 'diagram6', name: '06_troubleshooting'},
+                {id: 'diagram7', name: '07_comparacion_modos'},
+                {id: 'diagram8', name: '08_ejemplo_3_pasos'},
+                {id: 'diagram9', name: '09_estrategias_filtrado'},
+                {id: 'diagram10', name: '10_prioritycols_impacto'}
+            ];
+
+            let index = 0;
+            function downloadNext() {
+                if (index < diagrams.length) {
+                    const diagram = diagrams[index];
+                    downloadDiagram(diagram.id, diagram.name);
+                    index++;
+                    setTimeout(downloadNext, 1000); // 1 segundo entre descargas
+                } else {
+                    alert('✅ Todos los diagramas descargados!');
+                }
+            }
+            downloadNext();
+        }
+
+        // Mensaje de bienvenida
+        window.addEventListener('load', function() {
+            setTimeout(function() {
+                console.log('✅ Diagramas renderizados. Puedes descargarlos individualmente o todos a la vez.');
+            }, 2000);
+        });
+    </script>
+</body>
+</html>
+
