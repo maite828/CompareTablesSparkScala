@@ -18,6 +18,7 @@ object DataGenerator {
     // IDs 5-10: Datos adicionales para muestreo aleatorio
     val refData = Seq(
       (1, "Alice", Some(""), "2023-11-22", "ES", 1),           // balance = "" (vacío)
+      (1, "Alice", Some(""), "2023-11-22", "ES", 1),           // balance = "" (vacío)
       (2, "Bob_v1", Some("200.0"), "2023-11-23", "ES", 4),     // Prioridad alta
       (2, "Bob_v2", Some("220.0"), "2023-11-23", "ES", 2),     // Prioridad alta - debería ganar
       (2, "Bob_v4", Some("255.0"), "2023-11-23", "ES", 2),     // Prioridad alta - debería ganar
@@ -53,6 +54,7 @@ object DataGenerator {
       (7, "Grace", Some("325.0"), "2023-11-22", "ES", 2),           // Cambio en balance
       (8, "Henry", Some("190.0"), "2023-11-22", "FR", 1),           // Igual
       (9, "Iris", Some("415.0"), "2023-11-22", "ES", 1),            // Cambio en balance
+      (9, "Iris", Some("415.0"), "2023-11-22", "ES", 2),            // Cambio en balance
       (10, "Jack", Some("230.0"), "2023-11-22", "FR", 2)            // Igual
     ).toDF("id_v2", "nombre_cliente", "saldo", "fecha_proceso", "pais", "priority")
 
