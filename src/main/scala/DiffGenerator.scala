@@ -23,12 +23,18 @@ object DiffGenerator extends Logging {
     StructField("results", StringType, true)
   ))
 
-  // Formats any value as String; keeps Decimal scale; renders null/empty as "-"
+  // Formats any value as String; keeps Decimal scale; distinguishes NULL from empty for clarity
   private def formatValue(c: Column, dt: DataType): Column = dt match {
     case _: DecimalType =>
-      val s = c.cast(StringType); when(s.isNull || trim(s) === "", lit("-")).otherwise(s)
+      val s = c.cast(StringType)
+      when(s.isNull, lit("NULL"))
+        .when(trim(s) === "", lit("<empty>"))
+        .otherwise(s)
     case _ =>
-      val s = c.cast(StringType); when(s.isNull || trim(s) === "", lit("-")).otherwise(s)
+      val s = c.cast(StringType)
+      when(s.isNull, lit("NULL"))
+        .when(trim(s) === "", lit("<empty>"))
+        .otherwise(s)
   }
 
   // Canonicalizes complex types (map/array/struct/binary) to deterministic JSON/BASE64 for comparison

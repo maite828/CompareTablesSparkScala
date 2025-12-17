@@ -204,12 +204,19 @@ object DuplicateDetector {
     DuplicateOut(origin, id, category, exact, vdup, occ, variationsText)
   }
 
-  // Render deterministic variations text, ignoring the special NullToken.
+  // Render deterministic variations text, including NULL and empty values for consistency with hash calculation.
   private def buildVariationsText(row: org.apache.spark.sql.Row, nonKeys: Seq[String]): String = {
     val parts = nonKeys.flatMap { c =>
-      val arr = Option(row.getAs[Seq[String]](s"${c}_set")).getOrElse(Seq.empty)
-      val cleaned = arr.filterNot(_ == NullToken).distinct
-      if (cleaned.size > 1) Some(s"$c: [${cleaned.mkString(",")}]") else None
+      val arr = Option(row.getAs[Seq[String]](s"${c}_set")).getOrElse(Seq.empty).distinct
+      if (arr.size > 1) {
+        // Replace NullToken with "NULL" and empty string with "<empty>" for readability
+        val display = arr.map {
+          case v if v == NullToken => "NULL"
+          case v if v.isEmpty => "<empty>"
+          case v => v
+        }
+        Some(s"$c: [${display.mkString(", ")}]")
+      } else None
     }
     if (parts.isEmpty) "-" else parts.mkString(" | ")
   }
