@@ -34,12 +34,17 @@ class DiffGeneratorSpec extends AnyFlatSpec with Matchers with SparkSessionTestW
       checkDuplicates     = false,
       includeEqualsInDiff = true,
       autoCreateTables    = false,
-      // opcionales/nuevos
+      exportExcelPath     = None,
       priorityCols        = Seq.empty,
       aggOverrides        = Map.empty,
-      exportExcelPath     = None,
-      // requerido por CompareConfig
-      outputDateISO       = "2025-01-01"
+      nullKeyMatches      = true,              // NUEVO: añadido
+      outputDateISO       = "2025-01-01",
+      refPartitionSpecOverride = None,         // NUEVO: añadido
+      newPartitionSpecOverride = None,         // NUEVO: añadido
+      refFilter           = None,              // NUEVO: añadido
+      newFilter           = None,              // NUEVO: añadido
+      columnMapping       = Map.empty,         // NUEVO: añadido
+      enableDynamicPartitioning = false        // NUEVO: añadido
     )
 
     val diffs = DiffGenerator
@@ -54,20 +59,20 @@ class DiffGeneratorSpec extends AnyFlatSpec with Matchers with SparkSessionTestW
       )
       .collect()
 
-    // Normalizamos: id → String; valores null → "-"
+    // Normalizamos: id → String; valores null → "NULL" (no "-")
     val got: Set[(String, String, String, String, String)] =
       diffs.map { r =>
         val idStr     = String.valueOf(r.getAs[Any]("id"))
         val colName   = r.getAs[String]("column")
-        val refValue  = Option(r.getAs[Any]("value_ref")).map(_.toString).getOrElse("-")
-        val newValue  = Option(r.getAs[Any]("value_new")).map(_.toString).getOrElse("-")
+        val refValue  = Option(r.getAs[Any]("value_ref")).map(_.toString).getOrElse("NULL")  // CAMBIO: "-" → "NULL"
+        val newValue  = Option(r.getAs[Any]("value_new")).map(_.toString).getOrElse("NULL")  // CAMBIO: "-" → "NULL"
         val resultTag = r.getAs[String]("results")
         (idStr, colName, refValue, newValue, resultTag)
       }.toSet
 
     val expected = Set(
       ("1", "col", "a", "b", "NO_MATCH"),
-      ("2", "col", "x", "-", "ONLY_IN_REF")
+      ("2", "col", "x", "NULL", "ONLY_IN_REF")  // CAMBIO: "-" → "NULL"
     )
 
     got shouldEqual expected
